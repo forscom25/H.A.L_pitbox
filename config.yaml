@@ -142,7 +142,7 @@ local_planning:
 control:
   ControllerSelection:
     # lateral_controller_type: "PurePursuit", "Stanley"
-    lateral_controller_type: "PurePursuit" 
+    lateral_controller_type: "Stanley" 
 
   PurePursuit:
     lookahead_distance: 5.0
