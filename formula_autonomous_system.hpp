@@ -70,10 +70,10 @@ constexpr double EARTH_RADIUS = 6378137.0; // WGS84 Earth radius in meters
 
 // ==================== Types ====================
 struct Cone {
-    pcl::PointXYZ center;
-    std::string color;
-    float confidence;
-    std::vector<pcl::PointXYZ> points;
+    pcl::PointXYZ center; // Cone center
+    std::string color; // Cone color (yellow, blue, orange)
+    float confidence; // Confidence level of cone detection (0.0 to 1.0)
+    std::vector<pcl::PointXYZ> points; // Points belonging to the cone cluster
 };
 
 struct ColorConfidence {
@@ -83,14 +83,15 @@ struct ColorConfidence {
     double unknown_confidence;
     
     ColorConfidence() : yellow_confidence(0.0), blue_confidence(0.0), 
-                       orange_confidence(0.0), unknown_confidence(1.0) {}
+                       orange_confidence(0.0), unknown_confidence(1.0) {} // initialize unknown confidence to 1.0
 };
 
 struct VehicleState {
-    Eigen::Vector2d position; // 차량의 현재 위치 (x, y)
-    double yaw;               // 차량의 현재 헤딩 (rad)
-    double speed;             // 차량의 현재 속도 (m/s)
+    Eigen::Vector2d position; // vehicle position in 2D (x, y)
+    double yaw;               // vehicle yaw angle in radians
+    double speed;             // current vehicle speed (m/s)
 
+    // initialize with default values
     VehicleState(double x = 0.0, double y = 0.0, double y_rad = 0.0, double spd = 0.0)
         : position(x, y), yaw(y_rad), speed(spd) {}
 };
@@ -116,6 +117,7 @@ struct StateTransitionResult {
     ASState current_state;
     std::string message;
     
+    // result reporting
     StateTransitionResult(bool s, ASState prev, ASState curr, const std::string& msg)
         : success(s), previous_state(prev), current_state(curr), message(msg) {}
 };
@@ -136,12 +138,12 @@ struct PerceptionParams
     double lidar_roi_z_max_;
 
     // Ground Removal (RANSAC)
-    int lidar_ransac_iterations_;
+    int lidar_ransac_iterations_; 
     double lidar_ransac_distance_threshold_;
     
     // Clustering (DBSCAN)
-    double lidar_dbscan_eps_;
-    int lidar_dbscan_min_points_;
+    double lidar_dbscan_eps_; // Epsilon distance for clustering
+    int lidar_dbscan_min_points_; // Minimum points to form a cluster
     
     // Cone Detection
     double lidar_cone_detection_min_height_;
@@ -161,13 +163,16 @@ struct PerceptionParams
     double camera_cy_;                    // Principal point Y
     
     // Camera Extrinsics (Camera coordinate system relative to vehicle base)
-    std::vector<double> camera_translation_; // [x, y, z] translation from base to camera
-    std::vector<double> camera_rotation_;    // [roll, pitch, yaw] rotation from base to camera (radians)
+    std::vector<double> camera1_translation_; // [x, y, z] translation from base to camera1
+    std::vector<double> camera1_rotation_;    // [roll, pitch, yaw] rotation from base to camera1 (radians)
+
+    std::vector<double> camera2_translation_; // [x, y, z] translation from base to camera2
+    std::vector<double> camera2_rotation_;    // [roll, pitch, yaw] rotation from base to camera2 (radians)
     
     // Image Processing
     bool camera_enable_preprocessing_;
-    double camera_gaussian_blur_sigma_;
-    int camera_bilateral_filter_d_;
+    double camera_gaussian_blur_sigma_; // noise reduction sigma for Gaussian blur
+    int camera_bilateral_filter_d_; // smart blur filter(maintain edges)
     
     // HSV Color Thresholds for Cone Detection
     int camera_hsv_window_size_;
@@ -210,8 +215,10 @@ struct PerceptionParams
         
         printf("\n[Camera Parameters]\n");
         printf("  Intrinsics: fx=%.1f, fy=%.1f, cx=%.1f, cy=%.1f\n", camera_fx_, camera_fy_, camera_cx_, camera_cy_);
-        printf("  Translation: [%.3f, %.3f, %.3f]\n", camera_translation_[0], camera_translation_[1], camera_translation_[2]);
-        printf("  Rotation: [%.3f, %.3f, %.3f] deg\n", camera_rotation_[0], camera_rotation_[1], camera_rotation_[2]);
+        printf("  Camera 1 (Left) Translation: [%.3f, %.3f, %.3f]\n", camera1_translation_[0], camera1_translation_[1], camera1_translation_[2]);
+        printf("  Camera 1 (Left) Rotation: [%.3f, %.3f, %.3f] deg\n", camera1_rotation_[0], camera1_rotation_[1], camera1_rotation_[2]);
+        printf("  Camera 2 (Right) Translation: [%.3f, %.3f, %.3f]\n", camera2_translation_[0], camera2_translation_[1], camera2_translation_[2]);
+        printf("  Camera 2 (Right) Rotation: [%.3f, %.3f, %.3f] deg\n", camera2_rotation_[0], camera2_rotation_[1], camera2_rotation_[2]);
         printf("  Preprocessing enabled: %s\n", camera_enable_preprocessing_ ? "true" : "false");
         printf("  Gaussian blur sigma: %.3f\n", camera_gaussian_blur_sigma_);
         printf("  Bilateral filter diameter: %d\n", camera_bilateral_filter_d_);
@@ -266,16 +273,27 @@ struct PerceptionParams
         if(!pnh.getParam("/perception/camera_intrinsics/principal_point_x", camera_cx_)){std::cerr<<"Param perception/camera_intrinsics/principal_point_x has error" << std::endl; return false;}
         if(!pnh.getParam("/perception/camera_intrinsics/principal_point_y", camera_cy_)){std::cerr<<"Param perception/camera_intrinsics/principal_point_y has error" << std::endl; return false;}
 
-        // Camera Extrinsics
-        if(camera_translation_.size() != 3) camera_translation_.resize(3);
-        if(camera_rotation_.size() != 3) camera_rotation_.resize(3);
+        // Camera1 Extrinsics
+        if(camera1_translation_.size() != 3) camera1_translation_.resize(3);
+        if(camera1_rotation_.size() != 3) camera1_rotation_.resize(3);
         
-        if(!pnh.getParam("/perception/camera_extrinsics/translation_x", camera_translation_[0])){std::cerr<<"Param perception/camera_extrinsics/translation_x has error" << std::endl; return false;}
-        if(!pnh.getParam("/perception/camera_extrinsics/translation_y", camera_translation_[1])){std::cerr<<"Param perception/camera_extrinsics/translation_y has error" << std::endl; return false;}
-        if(!pnh.getParam("/perception/camera_extrinsics/translation_z", camera_translation_[2])){std::cerr<<"Param perception/camera_extrinsics/translation_z has error" << std::endl; return false;}
-        if(!pnh.getParam("/perception/camera_extrinsics/rotation_roll", camera_rotation_[0])){std::cerr<<"Param perception/camera_extrinsics/rotation_roll has error" << std::endl; return false;}
-        if(!pnh.getParam("/perception/camera_extrinsics/rotation_pitch", camera_rotation_[1])){std::cerr<<"Param perception/camera_extrinsics/rotation_pitch has error" << std::endl; return false;}
-        if(!pnh.getParam("/perception/camera_extrinsics/rotation_yaw", camera_rotation_[2])){std::cerr<<"Param perception/camera_extrinsics/rotation_yaw has error" << std::endl; return false;}
+        if(!pnh.getParam("/perception/camera1_extrinsics/translation_x", camera1_translation_[0])){std::cerr<<"Param perception/camera1_extrinsics/translation_x has error" << std::endl; return false;}
+        if(!pnh.getParam("/perception/camera1_extrinsics/translation_y", camera1_translation_[1])){std::cerr<<"Param perception/camera1_extrinsics/translation_y has error" << std::endl; return false;}
+        if(!pnh.getParam("/perception/camera1_extrinsics/translation_z", camera1_translation_[2])){std::cerr<<"Param perception/camera1_extrinsics/translation_z has error" << std::endl; return false;}
+        if(!pnh.getParam("/perception/camera1_extrinsics/rotation_roll", camera1_rotation_[0])){std::cerr<<"Param perception/camera1_extrinsics/rotation_roll has error" << std::endl; return false;}
+        if(!pnh.getParam("/perception/camera1_extrinsics/rotation_pitch", camera1_rotation_[1])){std::cerr<<"Param perception/camera1_extrinsics/rotation_pitch has error" << std::endl; return false;}
+        if(!pnh.getParam("/perception/camera1_extrinsics/rotation_yaw", camera1_rotation_[2])){std::cerr<<"Param perception/camera1_extrinsics/rotation_yaw has error" << std::endl; return false;}
+
+        // Camera2 Extrinsics
+        if(camera2_translation_.size() != 3) camera2_translation_.resize(3);
+        if(camera2_rotation_.size() != 3) camera2_rotation_.resize(3);
+
+        if(!pnh.getParam("/perception/camera2_extrinsics/translation_x", camera2_translation_[0])){std::cerr<<"Param perception/camera2_extrinsics/translation_x has error" << std::endl; return false;}
+        if(!pnh.getParam("/perception/camera2_extrinsics/translation_y", camera2_translation_[1])){std::cerr<<"Param perception/camera2_extrinsics/translation_y has error" << std::endl; return false;}
+        if(!pnh.getParam("/perception/camera2_extrinsics/translation_z", camera2_translation_[2])){std::cerr<<"Param perception/camera2_extrinsics/translation_z has error" << std::endl; return false;}
+        if(!pnh.getParam("/perception/camera2_extrinsics/rotation_roll", camera2_rotation_[0])){std::cerr<<"Param perception/camera2_extrinsics/rotation_roll has error" << std::endl; return false;}
+        if(!pnh.getParam("/perception/camera2_extrinsics/rotation_pitch", camera2_rotation_[1])){std::cerr<<"Param perception/camera2_extrinsics/rotation_pitch has error" << std::endl; return false;}
+        if(!pnh.getParam("/perception/camera2_extrinsics/rotation_yaw", camera2_rotation_[2])){std::cerr<<"Param perception/camera2_extrinsics/rotation_yaw has error" << std::endl; return false;}
 
         // Camera Image Processing
         if(!pnh.getParam("/perception/camera_image_processing/enable_preprocessing", camera_enable_preprocessing_)){std::cerr<<"Param perception/camera_image_processing/enable_preprocessing has error" << std::endl; return false;}
@@ -446,9 +464,11 @@ class RoiExtractor {
 public:
     RoiExtractor(const std::shared_ptr<PerceptionParams> params);
     
+    // Extracts the roi_cloud from the input_cloud based on the params_
     void extractRoi(const pcl::PointCloud<pcl::PointXYZ>::Ptr& input_cloud, pcl::PointCloud<pcl::PointXYZ>::Ptr& roi_cloud);
 
 private:
+    // Parameters for ROI extraction
     std::shared_ptr<PerceptionParams> params_;
 };
 
@@ -460,6 +480,7 @@ public:
     // Legacy constructor for backward compatibility
     GroundRemoval(double distance_threshold = 0.2, int max_iterations = 1000);
     
+    // Extracts ground points and non-ground points from the input cloud
     void removeGround(
         const pcl::PointCloud<pcl::PointXYZ>::Ptr& input_cloud,
         pcl::PointCloud<pcl::PointXYZ>::Ptr& ground_points,
@@ -469,13 +490,14 @@ public:
 private:
     std::shared_ptr<PerceptionParams> params_;
     
-    // RANSAC 3-point plane fitting
+    // RANSAC 3-point plane fitting once
     bool fitPlane(
         const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud,
         Eigen::Vector4f& plane_coefficients,
         std::vector<int>& inliers
     );
     
+    // Computes the distance from a point to a plane defined by its coefficients
     double pointToPlaneDistance(const pcl::PointXYZ& point, const Eigen::Vector4f& plane);
     std::mt19937 rng_;
 };
@@ -500,7 +522,7 @@ private:
     std::vector<int> regionQuery(
         const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud,
         int point_idx,
-        const pcl::search::KdTree<pcl::PointXYZ>::Ptr& kdtree
+        const pcl::search::KdTree<pcl::PointXYZ>::Ptr& kdtree // search engine
     );
     
     // Cone validation and color classification
@@ -518,21 +540,20 @@ public:
     explicit ColorDetection(const std::shared_ptr<PerceptionParams>& params);
     
     // Main color detection function
-    std::string detectConeColor(const Cone& cone, const cv::Mat& rgb_image);
-    
-    // Batch processing for multiple cones
-    std::vector<Cone> classifyConesColor(const std::vector<Cone>& cones, const cv::Mat& rgb_image);
+    std::vector<Cone> classifyConesColor(const std::vector<Cone>& cones, const cv::Mat& rgb_image1, const cv::Mat& rgb_image2); // rgb_image1: camera 1 (left), rgb_image2: camera 2 (right)
     
     // Utility functions
-    cv::Point2f projectToCamera(const pcl::PointXYZ& point_3d);
+    cv::Point2f projectToCamera(const pcl::PointXYZ& point_3d, int camera_id); // which camera to project to
     bool isPointInImage(const cv::Point2f& point, const cv::Size& image_size);
     
     // Debug visualization
     cv::Mat visualizeProjection(const std::vector<Cone>& cones, const cv::Mat& rgb_image);
     
     // Get computed transformation matrices (for debugging)
-    cv::Mat getCameraToBaseRotation() const { return camera_to_base_rotation_.clone(); }
-    cv::Mat getCameraToBaseTranslation() const { return camera_to_base_translation_.clone(); }
+    cv::Mat getCameraToBaseRotation() const { return camera1_to_base_rotation_.clone(); }
+    cv::Mat getCameraToBaseTranslation() const { return camera1_to_base_translation_.clone(); }
+    cv::Mat getCamera2ToBaseRotation() const { return camera2_to_base_rotation_.clone(); }
+    cv::Mat getCamera2ToBaseTranslation() const { return camera2_to_base_translation_.clone(); }
 
 private:
     std::shared_ptr<PerceptionParams> params_;
@@ -540,9 +561,11 @@ private:
     // Camera intrinsic matrix
     cv::Mat camera_matrix_;
     
-    // Computed transformation from camera to lidar coordinate system
-    cv::Mat camera_to_base_rotation_;    // 3x3 rotation matrix
-    cv::Mat camera_to_base_translation_; // 3x1 translation vector
+    // Computed transformation from camera to vehicle coordinate system
+    cv::Mat camera1_to_base_rotation_;    // camera 1 (left) 3x3 rotation matrix
+    cv::Mat camera1_to_base_translation_; // camera 1 (left) 3x1 translation vector
+    cv::Mat camera2_to_base_rotation_;    // camera 2 (right) 3x3 rotation matrix
+    cv::Mat camera2_to_base_translation_; // camera 2 (right) 3x1 translation vector
     
     // Initialize camera parameters and compute transformations
     void initializeCameraParameters();
@@ -550,6 +573,9 @@ private:
     
     // Helper function to create rotation matrix from euler angles
     cv::Mat createTransformationMatrix(double x, double y, double z, double roll, double pitch, double yaw);
+
+    // Helper function to detect cone color
+    std::string detectConeColor(const Cone& cone, const cv::Mat& rgb_image, const cv::Point2f& projection_point);
     
     // Color analysis functions
     ColorConfidence analyzeColorWindow(const cv::Mat& hsv_image, const cv::Point2f& center, int window_size);
@@ -676,6 +702,7 @@ struct TrajectoryPoint {
     double speed;               // target speed (m/s)
     double s;                   // arc length from start
     
+    // initialize with default values
     TrajectoryPoint(double x = 0.0, double y = 0.0, double yaw_val = 0.0, 
                    double curv = 0.0, double spd = 0.0, double s_val = 0.0)
         : position(x, y), yaw(yaw_val), curvature(curv), speed(spd), s(s_val) {}
@@ -842,17 +869,18 @@ public: // Function components
              fs_msgs::GoSignal& go_signal_msg,
              fs_msgs::ControlCommand& control_command_msg,
              std_msgs::String& autonomous_mode_msg);
+            
 private:
     void getLidarPointCloud(sensor_msgs::PointCloud2& msg, pcl::PointCloud<pcl::PointXYZ>::Ptr& point_cloud);
     void getCameraImage(sensor_msgs::Image& msg, cv::Mat& image);
     void getImuData(sensor_msgs::Imu& msg, Eigen::Vector3d& acc, Eigen::Vector3d& gyro, Eigen::Quaterniond& orientation);
+
 // Variables
 private:
     bool is_initialized_;
     ros::NodeHandle pnh_;
 
 public:
-
     // Perception
     std::shared_ptr<PerceptionParams> perception_params_;
 

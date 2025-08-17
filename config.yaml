@@ -57,13 +57,22 @@ perception:
     principal_point_x: 320.0
     principal_point_y: 240.0
 
-  camera_extrinsics:
-    # Camera position relative to vehicle base (meters, degrees)
+  camera1_extrinsics:
+    # Camera 1 (Left) position relative to vehicle base (meters, degrees)
+    translation_x: -0.43
+    translation_y: 0.15
+    translation_z: 0.82
+    rotation_roll: 0.0
+    rotation_pitch: 0.0
+    rotation_yaw: 0.0
+
+  camera2_extrinsics:
+    # Camera 2 (Right) position relative to vehicle base (meters, degrees)
     translation_x: -0.43
     translation_y: -0.15
     translation_z: 0.82
     rotation_roll: 0.0
-    rotation_pitch: -30.0
+    rotation_pitch: 0.0
     rotation_yaw: 0.0
 
   camera_image_processing:
@@ -133,7 +142,7 @@ local_planning:
 control:
   ControllerSelection:
     # lateral_controller_type: "PurePursuit", "Stanley"
-    lateral_controller_type: "PurePursuit" 
+    lateral_controller_type: "Stanley" 
 
   PurePursuit:
     lookahead_distance: 5.0
