@@ -1,11 +1,10 @@
 /**
- * @file formula_autonomous_system.hpp
+ * @file formula_autonomous_system_node.hpp
  * @author Jiwon Seok (jiwonseok@hanyang.ac.kr)
  * @brief 
- * @version 0.1
- * @date 2025-07-21
- * 
- * @copyright Copyright (c) 2025
+ * @version 0.4
+ * @date 2025-08-20
+ * * @copyright Copyright (c) 2025
  */
 
 #ifndef FORMULA_AUTONOMOUS_SYSTEM_NODE_HPP
@@ -133,6 +132,8 @@ public: // Function components
     void publishDetectedConesMarker();
     void publishProjectedConesImage();
     void publishCenterLineMarker();
+    void publishLaneMarkers(); 
+    void publishConeMemoryMarker(); // 콘 메모리 시각화 함수 선언
     
 
 // Variables
@@ -186,6 +187,8 @@ public: // ROS
     ros::Publisher projected_cones_image_pub_;
     ros::Publisher center_line_marker_pub_;
     ros::Publisher lap_count_marker_pub_;
+    ros::Publisher lane_marker_pub_; 
+    ros::Publisher cone_memory_marker_pub_; // 콘 메모리 시각화 퍼블리셔 추가
 
     // Output messages
     fs_msgs::ControlCommand control_command_msg_;

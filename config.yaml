@@ -1,7 +1,7 @@
 # Formula Autonomous System Configuration
 # Combined configuration file for all subsystems
 # Author: Jiwon Seok (jiwonseok@hanyang.ac.kr)
-# Date: 2025-07-25
+# Date: 2025-08-20
 
 system:
   main_loop_rate: 1000.0 # [Hz]
@@ -57,13 +57,22 @@ perception:
     principal_point_x: 320.0
     principal_point_y: 240.0
 
-  camera_extrinsics:
-    # Camera position relative to vehicle base (meters, degrees)
+  camera1_extrinsics:
+    # Camera 1 (Left) position relative to vehicle base (meters, degrees)
+    translation_x: -0.43
+    translation_y: 0.15
+    translation_z: 0.82
+    rotation_roll: 0.0
+    rotation_pitch: 0.0
+    rotation_yaw: 0.0
+
+  camera2_extrinsics:
+    # Camera 2 (Right) position relative to vehicle base (meters, degrees)
     translation_x: -0.43
     translation_y: -0.15
     translation_z: 0.82
     rotation_roll: 0.0
-    rotation_pitch: -30.0
+    rotation_pitch: 0.0
     rotation_yaw: 0.0
 
   camera_image_processing:
@@ -121,7 +130,6 @@ local_planning:
     # Basic trajectory generation
     lookahead_distance: 20.0
     waypoint_spacing: 2.0
-    default_speed: 3.0
     
     # Cone-based path planning (meters)
     max_cone_distance: 25.0
@@ -130,10 +138,21 @@ local_planning:
     # Safety parameters (meters)
     safety_margin: 0.5
 
+    # Curvature-based Speed Control
+    max_speed: 3.0 
+    min_speed: 1.5  
+    curvature_gain: 20.0 
+    speed_lookahead_distance: 5.0 
+    max_deceleration: 9.0 
+
+    # Cone Memory
+    cone_memory_search_radius: 30.0
+    cone_memory_lateral_search_distance: 10.0 # m, 기억된 콘을 필터링할 좌우 탐색 거리 (NEW)
+
 control:
   ControllerSelection:
     # lateral_controller_type: "PurePursuit", "Stanley"
-    lateral_controller_type: "PurePursuit" 
+    lateral_controller_type: "Stanley" 
 
   PurePursuit:
     lookahead_distance: 5.0
@@ -144,10 +163,10 @@ control:
 
   SpeedControl:
     target_speed: 1.0
-    pid_kp: 0.3
-    pid_ki: 0.0
-    pid_kd: 0.01
-    max_throttle: 0.4
+    pid_kp: 0.5 
+    pid_ki: 0.01
+    pid_kd: 0.02
+    max_throttle: 0.6
 
   Vehicle:
     wheel_base: 1.55

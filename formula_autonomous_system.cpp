@@ -3,10 +3,9 @@
  * @author Jiwon Seok (jiwonseok@hanyang.ac.kr)
  * @author MinKyu Cho (chomk2000@hanyang.ac.kr)
  * @brief 
- * @version 0.1
- * @date 2025-07-21
- * 
- * @copyright Copyright (c) 2025
+ * @version 0.6
+ * @date 2025-08-20
+ * * @copyright Copyright (c) 2025
  */
 
 #include "formula_autonomous_system.hpp"
@@ -25,6 +24,7 @@ void RoiExtractor::extractRoi(const pcl::PointCloud<pcl::PointXYZ>::Ptr& input_c
     roi_cloud->header = input_cloud->header;
 
     for (const auto& point : input_cloud->points) {
+
         // Check if point is within ROI
         if (point.x > params_->lidar_roi_x_min_ && point.x < params_->lidar_roi_x_max_ &&
             point.y > params_->lidar_roi_y_min_ && point.y < params_->lidar_roi_y_max_ &&
@@ -53,6 +53,7 @@ void GroundRemoval::removeGround(
     pcl::PointCloud<pcl::PointXYZ>::Ptr& ground_points,
     pcl::PointCloud<pcl::PointXYZ>::Ptr& non_ground_points) {
     
+    // Clear output clouds
     ground_points->clear();
     non_ground_points->clear();
     
@@ -62,12 +63,14 @@ void GroundRemoval::removeGround(
     std::vector<int> best_inliers;
     
     if (fitPlane(input_cloud, best_plane, best_inliers)) {
-        // Extract ground and non-ground points
+        // create checklist for ground points
         std::vector<bool> is_ground(input_cloud->size(), false);
+        // Mark inliers as ground points
         for (int idx : best_inliers) {
             is_ground[idx] = true;
         }
         
+        // Extract ground and non-ground points
         for (size_t i = 0; i < input_cloud->size(); ++i) {
             if (is_ground[i]) {
                 ground_points->push_back(input_cloud->points[i]);
@@ -93,6 +96,7 @@ bool GroundRemoval::fitPlane(
     
     // Initialize best inlier count
     int best_inlier_count = 0;
+    // Random number generator for selecting points
     std::uniform_int_distribution<int> dist(0, cloud->size() - 1);
     
     // RANSAC algorithm
@@ -121,7 +125,6 @@ bool GroundRemoval::fitPlane(
         // Count inliers
         std::vector<int> current_inliers;
         for (size_t i = 0; i < cloud->size(); ++i) {
-            // d = - (normal.x * p1.x + normal.y * p1.y + normal.z * p1.z)
             if (pointToPlaneDistance(cloud->points[i], current_plane) < params_->lidar_ransac_distance_threshold_) {
                 current_inliers.push_back(i);
             }
@@ -356,32 +359,53 @@ void ColorDetection::computeCameraToLidarTransform() {
     // Convert degrees to radians
     double deg_to_rad = CV_PI / 180.0;
     
-    // Camera transformation (base -> camera)
-    cv::Mat T_base_to_camera = createTransformationMatrix(
-        params_->camera_translation_[0],  // x
-        params_->camera_translation_[1],  // y
-        params_->camera_translation_[2],  // z
-        params_->camera_rotation_[0] * deg_to_rad,  // roll (deg -> rad)
-        params_->camera_rotation_[1] * deg_to_rad,  // pitch (deg -> rad)
-        params_->camera_rotation_[2] * deg_to_rad   // yaw (deg -> rad)
+    // Camera1 transformation (vehicle -> camera1)
+    cv::Mat T_base_to_camera1 = createTransformationMatrix(
+        params_->camera1_translation_[0],  // x
+        params_->camera1_translation_[1],  // y
+        params_->camera1_translation_[2],  // z
+        params_->camera1_rotation_[0] * deg_to_rad,  // roll (deg -> rad)
+        params_->camera1_rotation_[1] * deg_to_rad,  // pitch (deg -> rad)
+        params_->camera1_rotation_[2] * deg_to_rad   // yaw (deg -> rad)
     );
 
-    // Create transformation matrix for x-front, y-left, z-up to z-front, y-right, x-down frame
+    // Camera2 transformation (vehicle -> camera2)
+    cv::Mat T_base_to_camera2 = createTransformationMatrix(
+        params_->camera2_translation_[0],  // x
+        params_->camera2_translation_[1],  // y
+        params_->camera2_translation_[2],  // z
+        params_->camera2_rotation_[0] * deg_to_rad,  // roll (deg -> rad)
+        params_->camera2_rotation_[1] * deg_to_rad,  // pitch (deg -> rad)
+        params_->camera2_rotation_[2] * deg_to_rad   // yaw (deg -> rad)
+    );
+
+    // Create transformation matrix for x-front, y-left, z-up_(vehicle frame) to z-front, x-right, y-down frame(camera frame)
     cv::Mat T_x_front_to_z_front = createTransformationMatrix(
-        0, 0, 0, -90.0 * deg_to_rad, 0, -90.0 * deg_to_rad
+        0, 0, 0,
+        -90.0 * deg_to_rad, 0, -90.0 * deg_to_rad
     );
-    // T_base_to_camera = T_base_to_camera * T_x_front_to_z_front;
 
-    // Compute camera to lidar transformation: camera -> vehicle * vehicle -> lidar = camera -> lidar
-    cv::Mat T_camera_to_base = T_base_to_camera.inv();
+    // Combine transformations: vehicle -> camera
+    T_base_to_camera1 = T_base_to_camera1 * T_x_front_to_z_front;
+    T_base_to_camera2 = T_base_to_camera2 * T_x_front_to_z_front;
 
-    // Final transformation: camera -> lidar
-    camera_to_base_rotation_ = T_camera_to_base.rowRange(0, 3).colRange(0, 3);
-    camera_to_base_translation_ = T_camera_to_base.rowRange(0, 3).col(3);
-    
-    std::cout << "Camera-to-vehicle transformation computed:" << std::endl;
-    std::cout << "  Rotation matrix:" << std::endl << camera_to_base_rotation_ << std::endl;
-    std::cout << "  Translation vector:" << std::endl << camera_to_base_translation_ << std::endl;
+    // Compute inverse transformation: camera -> vehicle
+    cv::Mat T_camera1_to_base = T_base_to_camera1.inv();
+    cv::Mat T_camera2_to_base = T_base_to_camera2.inv();
+
+    // Final transformation: camera1 -> vehicle
+    camera1_to_base_rotation_ = T_camera1_to_base.rowRange(0, 3).colRange(0, 3);
+    camera1_to_base_translation_ = T_camera1_to_base.rowRange(0, 3).col(3);
+    std::cout << "Camera1-to-vehicle transformation computed:" << std::endl;
+    std::cout << "Camera1 Rotation matrix:" << std::endl << camera1_to_base_rotation_ << std::endl;
+    std::cout << "Camera1 Translation vector:" << std::endl << camera1_to_base_translation_ << std::endl;
+
+    // Final transformation: camera2 -> vehicle
+    camera2_to_base_rotation_ = T_camera2_to_base.rowRange(0, 3).colRange(0, 3);
+    camera2_to_base_translation_ = T_camera2_to_base.rowRange(0, 3).col(3);
+    std::cout << "Camera2-to-vehicle transformation computed:" << std::endl;
+    std::cout << "Camera2 Rotation matrix:" << std::endl << camera2_to_base_rotation_ << std::endl;
+    std::cout << "Camer2 Translation vector:" << std::endl << camera2_to_base_translation_ << std::endl;
 }
 
 cv::Mat ColorDetection::createTransformationMatrix(double x, double y, double z, double roll, double pitch, double yaw) {
@@ -399,18 +423,10 @@ cv::Mat ColorDetection::createTransformationMatrix(double x, double y, double z,
     return T;
 }
 
-std::string ColorDetection::detectConeColor(const Cone& cone, const cv::Mat& rgb_image) {
+std::string ColorDetection::detectConeColor(const Cone& cone, const cv::Mat& rgb_image, const cv::Point2f& projection_point) {
     if (rgb_image.empty()) {
         std::cerr << "Warning: Empty image provided for color detection" << std::endl;
         return "unknown";
-    }
-    
-    // Project cone center to camera coordinates
-    cv::Point2f projected_point = projectToCamera(cone.center);
-    
-    // Check if projection is within image bounds
-    if (!isPointInImage(projected_point, rgb_image.size())) {
-        return "out_of_image";
     }
     
     // Preprocess image if enabled
@@ -421,8 +437,8 @@ std::string ColorDetection::detectConeColor(const Cone& cone, const cv::Mat& rgb
     cv::cvtColor(processed_image, hsv_image, cv::COLOR_BGR2HSV);
     
     // Analyze color in window around projected point
-    int window_size = 20; // 20x20 pixel window
-    ColorConfidence confidence = analyzeColorWindow(hsv_image, projected_point, window_size);
+    int window_size = params_->camera_hsv_window_size_;
+    ColorConfidence confidence = analyzeColorWindow(hsv_image, projection_point, window_size);
 
     // Select best color based on confidence
     std::string best_color = selectBestColor(confidence);
@@ -430,30 +446,67 @@ std::string ColorDetection::detectConeColor(const Cone& cone, const cv::Mat& rgb
     return best_color;
 }
 
-std::vector<Cone> ColorDetection::classifyConesColor(const std::vector<Cone>& cones, const cv::Mat& rgb_image) {
+std::vector<Cone> ColorDetection::classifyConesColor(const std::vector<Cone>& cones, const cv::Mat& rgb_image1, const cv::Mat& rgb_image2) {
     std::vector<Cone> classified_cones = cones;
     
-    for (auto& cone : classified_cones) {
-        cone.color = detectConeColor(cone, rgb_image);
+    for (auto& cone : classified_cones) { //
+        bool is_left_cone = (cone.center.y >= 0); // Positive y is left side
+
+        if (is_left_cone) {
+            // Project to camera 1 (left)
+            cv::Point2f pt1 = projectToCamera(cone.center, 1);
+            if (isPointInImage(pt1, rgb_image1.size())) {
+                cone.color = detectConeColor(cone, rgb_image1, pt1);
+                continue; // Skip if projected point is valid
+            }
+
+        // fallback to camera 2 (right) if projection fails
+            cv::Point2f pt2 = projectToCamera(cone.center, 2);
+            if (isPointInImage(pt2, rgb_image2.size())) {
+                cone.color = detectConeColor(cone, rgb_image2, pt2);
+                continue; // Skip if projected point is valid
+            }
+        } else {
+            // Project to camera 2 (right)
+            cv::Point2f pt2 = projectToCamera(cone.center, 2);
+            if (isPointInImage(pt2, rgb_image2.size())) {
+                cone.color = detectConeColor(cone, rgb_image2, pt2);
+                continue; // Skip if projected point is valid
+            }
+
+            // fallback to camera 1 (left) if projection fails
+            cv::Point2f pt1 = projectToCamera(cone.center, 1);
+            if (isPointInImage(pt1, rgb_image1.size())) {
+                cone.color = detectConeColor(cone, rgb_image1, pt1);
+                continue; // Skip if projected point is valid
+            }
+        }
+        // If both projections fail, set color to unknown
+        cone.color = "out of image";
     }
-    
     return classified_cones;
 }
 
-cv::Point2f ColorDetection::projectToCamera(const pcl::PointXYZ& point_3d) {
+cv::Point2f ColorDetection::projectToCamera(const pcl::PointXYZ& point_3d, int camera_id) {
     // Transform from Vehicle base to camera coordinate system
     cv::Mat cone_point_in_base = (cv::Mat_<double>(3, 1) << point_3d.x, point_3d.y, point_3d.z);
-    cv::Mat cone_point_in_camera = camera_to_base_rotation_ * cone_point_in_base + camera_to_base_translation_;
+    cv::Mat cone_point_in_camera;
     
+    if (camera_id == 1) { // Left Camera
+        cone_point_in_camera = camera1_to_base_rotation_ * cone_point_in_base + camera1_to_base_translation_;
+    } else { // Right Camera (camera_id == 2)
+        cone_point_in_camera = camera2_to_base_rotation_ * cone_point_in_base + camera2_to_base_translation_;
+    }
+
     // Check if point is in front of camera
-    if (cone_point_in_camera.at<double>(0, 0) <= 0) {
+    if (cone_point_in_camera.at<double>(2, 0) <= 0) {
         return cv::Point2f(-1, -1); // Invalid projection
     }
     
-    // Apply camera frame: from x-front, y-left, z-up to x-right, y-down, z-front
-    double x_cam = -cone_point_in_camera.at<double>(1, 0);
-    double y_cam = -cone_point_in_camera.at<double>(2, 0);
-    double z_cam =  cone_point_in_camera.at<double>(0, 0);
+    // camera coordinates (x_cam, y_cam, z_cam) for projection
+    double x_cam = cone_point_in_camera.at<double>(0, 0);
+    double y_cam = cone_point_in_camera.at<double>(1, 0);
+    double z_cam = cone_point_in_camera.at<double>(2, 0);
 
     // Transform to image plane
     double x_img = x_cam / z_cam;
@@ -475,7 +528,9 @@ cv::Mat ColorDetection::visualizeProjection(const std::vector<Cone>& cones, cons
     cv::Mat visualization = rgb_image.clone();
     
     for (const auto& cone : cones) {
-        cv::Point2f projected = projectToCamera(cone.center);
+         // Determine camera based on y coordinate
+        int primary_camera_id = (cone.center.y >= 0) ? 1 : 2;
+        cv::Point2f projected = projectToCamera(cone.center, primary_camera_id);
         
         if (isPointInImage(projected, rgb_image.size())) {
             // Draw circle at projected position
@@ -489,7 +544,7 @@ cv::Mat ColorDetection::visualizeProjection(const std::vector<Cone>& cones, cons
             } else {
                 color = cv::Scalar(128, 128, 128); // Gray for unknown
             }
-            
+
             cv::circle(visualization, projected, 10, color, 2);
             cv::putText(visualization, cone.color, 
                        cv::Point(projected.x + 15, projected.y), 
@@ -1026,12 +1081,12 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateConesTrajectory(const 
         }
     }
     
+    // 콘이 없으면 직진 경로 생성
     if (blue_cones_local.empty() && yellow_cones_local.empty()) {
-        // 콘이 없으면 직진 경로 생성
         int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_) + 1;
         for (int i = 0; i < num_points; ++i) {
             double x = i * params_->waypoint_spacing_;
-            last_trajectory_.emplace_back(x, 0.0, 0.0, 0.0, params_->default_speed_, x);
+            last_trajectory_.emplace_back(x, 0.0, 0.0, 0.0, params_->max_speed_, x);
         }
         return last_trajectory_;
     }
@@ -1091,21 +1146,71 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateConesTrajectory(const 
         path_points.push_back(waypoint);
     }
     
-    // 3. 로컬 좌표계에서 궤적점 생성
-    for (size_t i = 0; i < path_points.size(); ++i) {
-        double local_yaw = 0.0;
-        if (i < path_points.size() - 1) {
-            Eigen::Vector2d dir = path_points[i + 1] - path_points[i];
-            local_yaw = atan2(dir.y(), dir.x());
-        } else if (i > 0) {
-            Eigen::Vector2d dir = path_points[i] - path_points[i - 1];
-            local_yaw = atan2(dir.y(), dir.x());
+    // 3. Spline 보간법을 사용하여 경로를 부드럽게 만듭니다.
+    if (path_points.size() >= 2) {
+        std::vector<double> x_pts, y_pts;
+        for (const auto& pt : path_points) {
+            x_pts.push_back(pt.x());
+            y_pts.push_back(pt.y());
+        }
+
+        tk::spline s;
+        s.set_points(x_pts, y_pts);
+
+        std::vector<TrajectoryPoint> geometry_path;
+        double s_step = 0.5; // 0.5m 간격으로 점 생성
+        for (double i = 0; i < params_->lookahead_distance_; i += s_step) {
+            double x = i;
+            double y = s(x);
+            
+            // yaw 계산을 위해 미세한 다음 점(x_next)을 사용
+            double x_next = x + 0.01;
+            double y_next = s(x_next);
+            double yaw = std::atan2(y_next - y, x_next - x);
+            double curvature = calculateCurvature(s, x);
+
+            geometry_path.emplace_back(x, y, yaw, curvature, 0.0, i);
         }
         
-        last_trajectory_.emplace_back(
-            path_points[i].x(), path_points[i].y(), 
-            local_yaw, 0.0, params_->default_speed_, path_points[i].x()
-        );
+        // 4. 예측적 속도 프로파일링
+        if (!geometry_path.empty()) {
+            // 마지막 지점 속도는 최고 속도로 설정
+            geometry_path.back().speed = params_->max_speed_;
+
+            // 경로를 역방향으로 순회하며 속도 계산
+            for (int i = geometry_path.size() - 2; i >= 0; --i) {
+                double dist = (geometry_path[i+1].position - geometry_path[i].position).norm();
+
+                // a. 최대 감속도를 고려한 속도
+                double speed_decel = std::sqrt(geometry_path[i+1].speed * geometry_path[i+1].speed + 2 * params_->max_deceleration_ * dist);
+                
+                // b. 곡률을 고려한 속도
+                double speed_curve = params_->max_speed_ / (1.0 + params_->curvature_gain_ * std::abs(geometry_path[i].curvature));
+
+                // 두 속도와 최대 속도 중 가장 작은 값을 현재 지점의 목표 속도로 설정
+                geometry_path[i].speed = std::min({params_->max_speed_, speed_decel, speed_curve});
+                geometry_path[i].speed = std::max(params_->min_speed_, geometry_path[i].speed);
+            }
+        }
+        last_trajectory_ = geometry_path;
+
+
+    } else { // Spline을 만들 수 없을 경우 기존 방식 사용
+        for (size_t i = 0; i < path_points.size(); ++i) {
+            double local_yaw = 0.0;
+            if (i < path_points.size() - 1) {
+                Eigen::Vector2d dir = path_points[i + 1] - path_points[i];
+                local_yaw = atan2(dir.y(), dir.x());
+            } else if (i > 0) {
+                Eigen::Vector2d dir = path_points[i] - path_points[i - 1];
+                local_yaw = atan2(dir.y(), dir.x());
+            }
+            
+            last_trajectory_.emplace_back(
+                path_points[i].x(), path_points[i].y(), 
+                local_yaw, 0.0, params_->max_speed_, path_points[i].x()
+            );
+        }
     }
     
     return last_trajectory_;
@@ -1135,6 +1240,22 @@ double TrajectoryGenerator::calculateAngle(const Eigen::Vector2d& p1, const Eige
     return std::atan2(diff.y(), diff.x());
 }
 
+double TrajectoryGenerator::calculateCurvature(tk::spline& s, double x) {
+    // 수치 미분을 사용하여 1차 및 2차 도함수 근사
+    double dx = 0.01;
+    double y_plus = s(x + dx);
+    double y_minus = s(x - dx);
+    double y_current = s(x);
+
+    double first_derivative = (y_plus - y_minus) / (2 * dx);
+    double second_derivative = (y_plus - 2 * y_current + y_minus) / (dx * dx);
+
+    // 곡률 공식: k = |y''| / (1 + y'^2)^(3/2)
+    double curvature = std::abs(second_derivative) / std::pow(1 + first_derivative * first_derivative, 1.5);
+    return curvature;
+}
+
+
 void TrajectoryGenerator::printTrajectoryStats() const
 {
     std::cout << "=== Trajectory Generator Statistics ===" << std::endl;
@@ -1150,7 +1271,7 @@ void TrajectoryGenerator::printTrajectoryStats() const
         double max_curvature = 0.0;
         for (const auto& point : last_trajectory_) {
             avg_speed += point.speed;
-            max_curvature = std::max(max_curvature, point.curvature);
+            max_curvature = std::max(max_curvature, std::abs(point.curvature));
         }
         avg_speed /= last_trajectory_.size();
         
@@ -1180,12 +1301,11 @@ double PurePursuit::calculateSteeringAngle(const VehicleState& current_state, co
 
 int PurePursuit::findTargetPointIndex(const std::vector<TrajectoryPoint>& path) const {
     int target_idx = 0;
-    for (int i = 0; i < path.size(); ++i) {
-        int current_idx = i % path.size();
-        double dist_from_car = path[current_idx].position.norm();
+    for (size_t i = 0; i < path.size(); ++i) {
+        double dist_from_car = path[i].position.norm();
         
         if (dist_from_car >= params_->pp_lookahead_distance_) {
-            target_idx = current_idx;
+            target_idx = i;
             break;
         }
     }
@@ -1209,12 +1329,10 @@ double Stanley::calculateSteeringAngle(const VehicleState& current_state, const 
     // Get the point of front axle
     double min_dist = std::numeric_limits<double>::max();
     int closest_idx = 0;
-    Eigen::Vector2d front_axle_pos = path[0].position + 
-        Eigen::Vector2d(params_->vehicle_length_ * cos(path[0].yaw) * 0.5, 
-                        params_->vehicle_length_ * sin(path[0].yaw) * 0.5); // local trajectory is defined at the center of the vehicle
+    Eigen::Vector2d front_axle_pos = Eigen::Vector2d(params_->vehicle_length_ * 0.5, 0.0);
     
     // Find the closest point on the path to the front axle
-    for (int i = 0; i < path.size(); ++i) {
+    for (size_t i = 0; i < path.size(); ++i) {
         double dist = (path[i].position - front_axle_pos).norm();
         if (dist < min_dist) {
             min_dist = dist;
@@ -1454,10 +1572,42 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     clustering_->extractCones(non_ground_point_cloud_, cones_);
 
     // Color detection
-    cv::Mat camera1_image;
+    cv::Mat camera1_image, camera2_image;
     getCameraImage(camera1_msg, camera1_image);
-    cones_ = color_detection_->classifyConesColor(cones_, camera1_image);
-    projected_cones_image_ = color_detection_->visualizeProjection(cones_, camera1_image);  // For Debugging
+    getCameraImage(camera2_msg, camera2_image);
+
+    if (!camera1_image.empty() && !camera2_image.empty()) {
+        cones_ = color_detection_->classifyConesColor(cones_, camera1_image, camera2_image);
+    }
+    
+    // for debugging: visualize cones
+    cv::Mat debug_img1 = color_detection_->visualizeProjection(cones_, camera1_image);
+    cv::Mat debug_img2 = color_detection_->visualizeProjection(cones_, camera2_image);
+
+    // Check if debug images are empty
+    if (!debug_img1.empty() && !debug_img2.empty()) {
+        // Resize debug images to match height
+        if (debug_img1.rows != debug_img2.rows) {
+            // Calculate the ratio and resize debug_img2 to match debug_img1 height
+            double ratio = (double)debug_img1.rows / (double)debug_img2.rows;
+            int new_width = (int)((double)debug_img2.cols * ratio);
+        
+            //  Resize debug_img2 to match debug_img1 height
+            cv::resize(debug_img2, debug_img2, cv::Size(new_width, debug_img1.rows));
+        }
+
+        cv::Mat combined_debug_image;
+        cv::hconcat(debug_img1, debug_img2, combined_debug_image);
+        projected_cones_image_ = combined_debug_image;
+
+    } else {
+        // show one of the debug images if the other is empty
+        if (!debug_img1.empty()) {
+            projected_cones_image_ = debug_img1;
+        } else if (!debug_img2.empty()) {
+            projected_cones_image_ = debug_img2;
+        }
+    }
 
     // Localization
     Eigen::Vector3d acc;    
@@ -1466,6 +1616,41 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     getImuData(imu_msg, acc, gyro, orientation);
     localization_->updateImu(Eigen::Vector3d(acc.x(), acc.y(), gyro.z()), orientation, imu_msg.header.stamp.toSec());
     localization_->updateGps(Eigen::Vector2d(gps_msg.latitude, gps_msg.longitude), gps_msg.header.stamp.toSec());
+
+    // ==================== Cone Memory Update ====================
+    // 현재 차량의 위치와 방향(Yaw)을 가져옵니다.
+    Eigen::Vector3d current_pose_global = localization_->getCurrentPose();
+    double current_yaw = current_pose_global.z();
+
+    // 현재 감지된 콘(차량 좌표계)을 지도 좌표계로 변환합니다.
+    for (const auto& cone_local : cones_) {
+        // 2D 회전 및 이동 변환
+        double global_x = current_pose_global.x() + cone_local.center.x * cos(current_yaw) - cone_local.center.y * sin(current_yaw);
+        double global_y = current_pose_global.y() + cone_local.center.x * sin(current_yaw) + cone_local.center.y * cos(current_yaw);
+        
+        bool is_new_cone = true;
+        // 메모리에 이미 있는 콘인지 확인합니다 (일정 거리 내에 있으면 같은 콘으로 간주).
+        for (auto& stored_cone : cone_memory_) {
+            double dist = std::sqrt(std::pow(stored_cone.center.x - global_x, 2) + std::pow(stored_cone.center.y - global_y, 2));
+            if (dist < 1.0) { // 1.0m 이내에 있으면 같은 콘으로 판단
+                is_new_cone = false;
+                // 위치를 평균내어 업데이트 (선택적)
+                stored_cone.center.x = (stored_cone.center.x + global_x) / 2.0;
+                stored_cone.center.y = (stored_cone.center.y + global_y) / 2.0;
+                break;
+            }
+        }
+
+        // 새로운 콘이면 메모리에 추가합니다.
+        if (is_new_cone) {
+            Cone new_cone_global = cone_local;
+            new_cone_global.center.x = global_x;
+            new_cone_global.center.y = global_y;
+            new_cone_global.center.z = cone_local.center.z; // Z값은 유지
+            cone_memory_.push_back(new_cone_global);
+        }
+    }
+    // ==========================================================
 
     // Go signal Update
     // State machine: Go signal
@@ -1476,20 +1661,45 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     // Planning
     planning_state_ = state_machine_->getCurrentState();
 
+    // ==================== Path Planning with Memory ====================
+    // 차량 주변의 모든 콘(현재 감지 + 메모리)을 가져옵니다.
+    std::vector<Cone> cones_for_planning;
+    for (const auto& cone_global : cone_memory_) {
+        double dist = std::sqrt(std::pow(cone_global.center.x - current_pose_global.x(), 2) + std::pow(cone_global.center.y - current_pose_global.y(), 2));
+        
+        if (dist < local_planning_params_->cone_memory_search_radius_) {
+            // 지도 좌표계의 콘을 다시 차량 좌표계로 변환합니다.
+            Cone cone_local = cone_global;
+            double dx = cone_global.center.x - current_pose_global.x();
+            double dy = cone_global.center.y - current_pose_global.y();
+            cone_local.center.x = dx * cos(-current_yaw) - dy * sin(-current_yaw);
+            cone_local.center.y = dx * sin(-current_yaw) + dy * cos(-current_yaw);
+            
+            // 전방 필터링: 차량 앞에 있고, 좌우로 너무 멀지 않은 콘만 사용합니다.
+            if (cone_local.center.x > -2.0 && // 차량 약간 뒤쪽 콘까지 허용
+                std::abs(cone_local.center.y) < local_planning_params_->cone_memory_lateral_search_distance_) {
+                cones_for_planning.push_back(cone_local);
+            }
+        }
+    }
+    // =================================================================
+
     // Local planning: Trajectory generator
-    trajectory_points_ = trajectory_generator_->generateTrajectory(cones_, planning_state_);
+    trajectory_points_ = trajectory_generator_->generateTrajectory(cones_for_planning, planning_state_);
     
     // Control
     // 1. 측위 모듈로부터 현재 차량 상태를 가져옵니다.
-    auto current_pose = localization_->getCurrentPose(); // return type: Eigen::Vector3d(x, y, yaw)
     auto current_vel = localization_->getCurrentVelocity(); // 이 함수가 속력(double)을 반환함
-    VehicleState vehicle_state(current_pose.x(), current_pose.y(), current_pose.z(), current_vel);
+    VehicleState vehicle_state(current_pose_global.x(), current_pose_global.y(), current_yaw, current_vel);
 
     // 2. 횡방향 제어: 경로와 현재 상태를 기반으로 조향각 계산
     double steering_angle = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_);
 
     // 3. 종방향 제어: 목표 속도와 현재 속도를 기반으로 스로틀 계산
-    double throttle = longitudinal_controller_->calculate(trajectory_points_[0].speed, vehicle_state.speed);
+    double throttle = 0.0;
+    if (!trajectory_points_.empty()) {
+        throttle = longitudinal_controller_->calculate(trajectory_points_[0].speed, vehicle_state.speed);
+    }
 
     // 4. 계산된 제어 명령을 멤버 변수에 저장
     control_command_msg.steering = -steering_angle; // FSDS 좌표계에 맞게 음수(-) 적용
@@ -1594,5 +1804,3 @@ void FormulaAutonomousSystem::getImuData(sensor_msgs::Imu& msg, Eigen::Vector3d&
     gyro.z() = msg.angular_velocity.z;
     return;
 }
-
-// commit test

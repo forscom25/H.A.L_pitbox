@@ -1,11 +1,10 @@
 /**
- * @file formula_autonomous_system.cpp
+ * @file formula_autonomous_system_node.cpp
  * @author Jiwon Seok (jiwonseok@hanyang.ac.kr)
  * @brief 
- * @version 0.1
- * @date 2025-07-21
- * 
- * @copyright Copyright (c) 2025
+ * @version 0.5
+ * @date 2025-08-20
+ * * @copyright Copyright (c) 2025
  */
 
 #include "formula_autonomous_system_node.hpp"
@@ -41,7 +40,9 @@ FormulaAutonomousSystemNode::~FormulaAutonomousSystemNode(){
     ROS_INFO("FormulaAutonomousSystemNode: Destructor called");
 
     // Thread join
-    main_thread_.join();
+    if (main_thread_.joinable()) {
+        main_thread_.join();
+    }
 
     return;
 }
@@ -69,6 +70,8 @@ bool FormulaAutonomousSystemNode::init(){
     projected_cones_image_pub_ = nh_.advertise<sensor_msgs::Image>("/fsds/projected_cones_image", 1);
     center_line_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/center_line_marker", 1);
     lap_count_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lap_count_marker", 1);
+    lane_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lane_markers", 1);
+    cone_memory_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/cone_memory_marker", 1, true); // 퍼블리셔 초기화 (latch=true)
 
     // Get parameters
     pnh_.getParam("/system/main_loop_rate", main_loop_rate_);
@@ -143,6 +146,8 @@ void FormulaAutonomousSystemNode::publish(){
     publishDetectedConesMarker();
     publishProjectedConesImage();
     publishCenterLineMarker();
+    publishLaneMarkers(); 
+    publishConeMemoryMarker(); // 콘 메모리 시각화 함수 호출
     return;
 }
 
@@ -335,6 +340,7 @@ void FormulaAutonomousSystemNode::publishDetectedConesMarker(){
 
 void FormulaAutonomousSystemNode::publishProjectedConesImage(){
     // Publish
+    if (camera1_msg_.data.empty()) return; // camera1_msg_가 초기화되었는지 확인
     sensor_msgs::Image projected_cones_image_msg;
     cv_bridge::CvImage cv_image;
     cv_image.header = camera1_msg_.header;
@@ -361,25 +367,19 @@ void FormulaAutonomousSystemNode::publishCenterLineMarker(){
     marker_line.action = visualization_msgs::Marker::ADD;
     marker_line.lifetime = ros::Duration(0.1);  // Show for 0.1 seconds
     marker_line.id = -1;  // Single line strip marker
-    marker_line.pose.orientation.x = 0.0;
-    marker_line.pose.orientation.y = 0.0;
-    marker_line.pose.orientation.z = 0.0;
     marker_line.pose.orientation.w = 1.0;
     marker_line.scale.x = 0.1;  // Line width
     marker_line.color.r = 0.0;
     marker_line.color.g = 1.0;
     marker_line.color.b = 0.0;
     marker_line.color.a = 1.0;
-    for(int i = 0; i < formula_autonomous_system_->trajectory_points_.size(); i++){
+    for(size_t i = 0; i < formula_autonomous_system_->trajectory_points_.size(); i++){
         visualization_msgs::Marker marker_speed;
         marker_speed.header = header;
         marker_speed.type = visualization_msgs::Marker::LINE_STRIP;
         marker_speed.action = visualization_msgs::Marker::ADD;
         marker_speed.lifetime = ros::Duration(0.1);  // Show for 0.1 seconds
         marker_speed.id = i;  // Single line strip marker
-        marker_speed.pose.orientation.x = 0.0;
-        marker_speed.pose.orientation.y = 0.0;
-        marker_speed.pose.orientation.z = 0.0;
         marker_speed.pose.orientation.w = 1.0;
         marker_speed.scale.x = 0.1;  // Line width
         marker_speed.color.r = 0.0;
@@ -416,6 +416,129 @@ void FormulaAutonomousSystemNode::publishCenterLineMarker(){
     center_line_marker_pub_.publish(center_line_marker);
     return;
 }
+
+
+void FormulaAutonomousSystemNode::publishLaneMarkers(){
+    // Get header
+    lidar_msg_mutex_.lock();
+    std_msgs::Header header = lidar_msg_.header;
+    lidar_msg_mutex_.unlock();
+    header.frame_id = "fsds/FSCar";
+
+    // Separate cones by color
+    std::vector<Cone> blue_cones, yellow_cones;
+    for(const auto& cone : formula_autonomous_system_->cones_){
+        if(cone.color == "blue"){
+            blue_cones.push_back(cone);
+        } else if(cone.color == "yellow"){
+            yellow_cones.push_back(cone);
+        }
+    }
+
+    // Sort cones by x-coordinate
+    auto sort_cones = [](const Cone& a, const Cone& b){
+        return a.center.x < b.center.x;
+    };
+    std::sort(blue_cones.begin(), blue_cones.end(), sort_cones);
+    std::sort(yellow_cones.begin(), yellow_cones.end(), sort_cones);
+
+    visualization_msgs::MarkerArray marker_array;
+
+    // Blue lane marker (only if there are enough points)
+    if (blue_cones.size() >= 2) {
+        visualization_msgs::Marker blue_line_strip;
+        blue_line_strip.header = header;
+        blue_line_strip.ns = "blue_lane";
+        blue_line_strip.id = 0;
+        blue_line_strip.type = visualization_msgs::Marker::LINE_STRIP;
+        blue_line_strip.action = visualization_msgs::Marker::ADD;
+        blue_line_strip.lifetime = ros::Duration(0.1);
+        blue_line_strip.pose.orientation.w = 1.0;
+        blue_line_strip.scale.x = 0.1; // Line width
+        blue_line_strip.color.b = 1.0;
+        blue_line_strip.color.a = 1.0;
+        for(const auto& cone : blue_cones){
+            geometry_msgs::Point p;
+            p.x = cone.center.x;
+            p.y = cone.center.y;
+            p.z = cone.center.z;
+            blue_line_strip.points.push_back(p);
+        }
+        marker_array.markers.push_back(blue_line_strip);
+    }
+
+    // Yellow lane marker (only if there are enough points)
+    if (yellow_cones.size() >= 2) {
+        visualization_msgs::Marker yellow_line_strip;
+        yellow_line_strip.header = header;
+        yellow_line_strip.ns = "yellow_lane";
+        yellow_line_strip.id = 1;
+        yellow_line_strip.type = visualization_msgs::Marker::LINE_STRIP;
+        yellow_line_strip.action = visualization_msgs::Marker::ADD;
+        yellow_line_strip.lifetime = ros::Duration(0.1);
+        yellow_line_strip.pose.orientation.w = 1.0;
+        yellow_line_strip.scale.x = 0.1; // Line width
+        yellow_line_strip.color.r = 1.0;
+        yellow_line_strip.color.g = 1.0;
+        yellow_line_strip.color.b = 0.0; // Corrected color to yellow
+        yellow_line_strip.color.a = 1.0;
+        for(const auto& cone : yellow_cones){
+            geometry_msgs::Point p;
+            p.x = cone.center.x;
+            p.y = cone.center.y;
+            p.z = cone.center.z;
+            yellow_line_strip.points.push_back(p);
+        }
+        marker_array.markers.push_back(yellow_line_strip);
+    }
+
+    // Publish the marker array (it might be empty if no lanes are valid)
+    lane_marker_pub_.publish(marker_array);
+}
+
+void FormulaAutonomousSystemNode::publishConeMemoryMarker() {
+    // 콘 메모리 시각화 함수 구현
+    std_msgs::Header header;
+    header.stamp = ros::Time::now();
+    header.frame_id = "map"; // 콘 메모리는 'map' 좌표계 기준
+
+    visualization_msgs::MarkerArray marker_array;
+    int id = 0;
+    for(const auto& cone : formula_autonomous_system_->cone_memory_){
+        visualization_msgs::Marker marker;
+        marker.header = header;
+        marker.ns = "cone_memory";
+        marker.id = id++;
+        marker.type = visualization_msgs::Marker::CYLINDER;
+        marker.action = visualization_msgs::Marker::ADD;
+        marker.lifetime = ros::Duration(); // 한 번 퍼블리시되면 계속 유지
+
+        marker.pose.position.x = cone.center.x;
+        marker.pose.position.y = cone.center.y;
+        marker.pose.position.z = cone.center.z;
+        marker.pose.orientation.w = 1.0;
+
+        // 현재 감지되는 콘과 구분되도록 크기와 투명도 조절
+        marker.scale.x = 0.3; 
+        marker.scale.y = 0.3;
+        marker.scale.z = 0.5;
+
+        if (cone.color == "yellow") {
+            marker.color.r = 1.0; marker.color.g = 1.0; marker.color.b = 0.0;
+        } else if (cone.color == "blue") {
+            marker.color.r = 0.0; marker.color.g = 0.0; marker.color.b = 1.0;
+        } else if (cone.color == "orange") {
+            marker.color.r = 1.0; marker.color.g = 0.5; marker.color.b = 0.0;
+        } else { 
+            marker.color.r = 0.5; marker.color.g = 0.5; marker.color.b = 0.5;
+        }
+        marker.color.a = 0.5; // 반투명하게 설정
+        marker_array.markers.push_back(marker);
+    }
+    cone_memory_marker_pub_.publish(marker_array);
+    return;
+}
+
 
 int main(int argc, char** argv){
     // Initialize ROS
