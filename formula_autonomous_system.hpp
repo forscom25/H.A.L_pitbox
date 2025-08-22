@@ -1472,8 +1472,7 @@ class ColorDetection
 public:
     explicit ColorDetection(const std::shared_ptr<PerceptionParams>& params);
     
-    // Main color detection function
-    std::vector<Cone> classifyConesColor(const std::vector<Cone>& cones, const cv::Mat& rgb_image1, const cv::Mat& rgb_image2); // rgb_image1: camera 1 (left), rgb_image2: camera 2 (right)
+    cv::Mat ConesColor(std::vector<Cone>& cones, sensor_msgs::Image& camera1_msg, sensor_msgs::Image& camera2_msg);
     
     // Utility functions
     cv::Point2f projectToCamera(const pcl::PointXYZ& point_3d, int camera_id); // which camera to project to
@@ -1490,7 +1489,7 @@ public:
 
 private:
     std::shared_ptr<PerceptionParams> params_;
-    
+
     // Camera intrinsic matrix
     cv::Mat camera_matrix_;
     
@@ -1506,6 +1505,9 @@ private:
     
     // Helper function to create rotation matrix from euler angles
     cv::Mat createTransformationMatrix(double x, double y, double z, double roll, double pitch, double yaw);
+
+    // Convert ROS image message to OpenCV Mat
+    void getCameraImage(sensor_msgs::Image& msg, cv::Mat& image);
 
     // Helper function to detect cone color
     std::string detectConeColor(const Cone& cone, const cv::Mat& rgb_image, const cv::Point2f& projection_point);
@@ -1525,6 +1527,9 @@ private:
     // Helper functions
     bool isInHSVRange(const cv::Vec3b& hsv_pixel, int hue_min, int hue_max, int sat_min, int val_min);
     cv::Rect getSafeWindow(const cv::Point2f& center, int window_size, const cv::Size& image_size);
+
+    // Main color detection function
+    std::vector<Cone> classifyConesColor(const std::vector<Cone>& cones, const cv::Mat& rgb_image1, const cv::Mat& rgb_image2); // rgb_image1: camera 1 (left), rgb_image2: camera 2 (right)
 };
 
 // Localization

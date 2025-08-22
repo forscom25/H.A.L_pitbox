@@ -425,6 +425,33 @@ cv::Mat ColorDetection::createTransformationMatrix(double x, double y, double z,
     return T;
 }
 
+void ColorDetection::getCameraImage(sensor_msgs::Image& msg, cv::Mat& image){
+    // Convert ROS Image message to OpenCV Mat
+    cv_bridge::CvImagePtr cv_ptr;
+    try {
+        // Convert ROS message to cv_bridge format
+        cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+        // Extract OpenCV Mat from cv_bridge
+        image = cv_ptr->image.clone();
+        
+        // Check if image is valid
+        if (image.empty()) {
+            ROS_WARN("Received empty camera image");
+            return;
+        }
+        
+        // Optional: Log image dimensions for debugging
+        ROS_DEBUG("Camera image received: %dx%d, channels: %d", 
+                  image.cols, image.rows, image.channels());
+    }
+    catch (cv_bridge::Exception& e) {
+        ROS_ERROR("cv_bridge exception while converting camera image: %s", e.what());
+        // Initialize empty image on error
+        image = cv::Mat();
+    }
+    return;
+}
+
 std::string ColorDetection::detectConeColor(const Cone& cone, const cv::Mat& rgb_image, const cv::Point2f& projection_point) {
     if (rgb_image.empty()) {
         std::cerr << "Warning: Empty image provided for color detection" << std::endl;
@@ -728,6 +755,45 @@ cv::Rect ColorDetection::getSafeWindow(const cv::Point2f& center, int window_siz
     // Return window [left, top, width, height]
     return cv::Rect(x, y, width, height);
 } 
+
+cv::Mat ColorDetection::ConesColor(std::vector<Cone>& cones, sensor_msgs::Image& camera1_msg, sensor_msgs::Image& camera2_msg) {
+    cv::Mat camera1_image, camera2_image;
+    getCameraImage(camera1_msg, camera1_image);
+    getCameraImage(camera2_msg, camera2_image);
+
+    if (!camera1_image.empty() && !camera2_image.empty()) {
+        cones = classifyConesColor(cones, camera1_image, camera2_image);
+    }
+
+    // for debugging: visualize cones
+    cv::Mat debug_img1 = visualizeProjection(cones, camera1_image);
+    cv::Mat debug_img2 = visualizeProjection(cones, camera2_image);
+    cv::Mat combined_debug_image;
+
+    // Check if debug images are empty
+    if (!debug_img1.empty() && !debug_img2.empty()) {
+        // Resize debug images to match height
+        if (debug_img1.rows != debug_img2.rows) {
+            // Calculate the ratio and resize debug_img2 to match debug_img1 height
+            double ratio = (double)debug_img1.rows / (double)debug_img2.rows;
+            int new_width = (int)((double)debug_img2.cols * ratio);
+        
+            //  Resize debug_img2 to match debug_img1 height
+            cv::resize(debug_img2, debug_img2, cv::Size(new_width, debug_img1.rows));
+        }
+
+        cv::hconcat(debug_img1, debug_img2, combined_debug_image);
+        
+    // show one of the debug images if the other is empty
+    } else if (!debug_img1.empty()) {
+        combined_debug_image = debug_img1;
+    } else if (!debug_img2.empty()) {
+        combined_debug_image = debug_img2;
+    }
+    
+    return combined_debug_image;
+}
+
 
 // ==================== Localization ====================
 
@@ -1585,42 +1651,7 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     clustering_->extractCones(non_ground_point_cloud_, cones_);
 
     // Color detection
-    cv::Mat camera1_image, camera2_image;
-    getCameraImage(camera1_msg, camera1_image);
-    getCameraImage(camera2_msg, camera2_image);
-
-    if (!camera1_image.empty() && !camera2_image.empty()) {
-        cones_ = color_detection_->classifyConesColor(cones_, camera1_image, camera2_image);
-    }
-    
-    // for debugging: visualize cones
-    cv::Mat debug_img1 = color_detection_->visualizeProjection(cones_, camera1_image);
-    cv::Mat debug_img2 = color_detection_->visualizeProjection(cones_, camera2_image);
-
-    // Check if debug images are empty
-    if (!debug_img1.empty() && !debug_img2.empty()) {
-        // Resize debug images to match height
-        if (debug_img1.rows != debug_img2.rows) {
-            // Calculate the ratio and resize debug_img2 to match debug_img1 height
-            double ratio = (double)debug_img1.rows / (double)debug_img2.rows;
-            int new_width = (int)((double)debug_img2.cols * ratio);
-        
-            //  Resize debug_img2 to match debug_img1 height
-            cv::resize(debug_img2, debug_img2, cv::Size(new_width, debug_img1.rows));
-        }
-
-        cv::Mat combined_debug_image;
-        cv::hconcat(debug_img1, debug_img2, combined_debug_image);
-        projected_cones_image_ = combined_debug_image;
-
-    } else {
-        // show one of the debug images if the other is empty
-        if (!debug_img1.empty()) {
-            projected_cones_image_ = debug_img1;
-        } else if (!debug_img2.empty()) {
-            projected_cones_image_ = debug_img2;
-        }
-    }
+    projected_cones_image_ = color_detection_->ConesColor(cones_, camera1_msg, camera2_msg);
 
     // Localization
     Eigen::Vector3d acc;    
@@ -1691,33 +1722,6 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
 void FormulaAutonomousSystem::getLidarPointCloud(sensor_msgs::PointCloud2& msg, pcl::PointCloud<pcl::PointXYZ>::Ptr& point_cloud){
     // Convert ROS PointCloud2 message to PCL point cloud
     pcl::fromROSMsg(msg, *point_cloud);
-    return;
-}
-
-void FormulaAutonomousSystem::getCameraImage(sensor_msgs::Image& msg, cv::Mat& image){
-    // Convert ROS Image message to OpenCV Mat
-    cv_bridge::CvImagePtr cv_ptr;
-    try {
-        // Convert ROS message to cv_bridge format
-        cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
-        // Extract OpenCV Mat from cv_bridge
-        image = cv_ptr->image.clone();
-        
-        // Check if image is valid
-        if (image.empty()) {
-            ROS_WARN("Received empty camera image");
-            return;
-        }
-        
-        // Optional: Log image dimensions for debugging
-        ROS_DEBUG("Camera image received: %dx%d, channels: %d", 
-                  image.cols, image.rows, image.channels());
-    }
-    catch (cv_bridge::Exception& e) {
-        ROS_ERROR("cv_bridge exception while converting camera image: %s", e.what());
-        // Initialize empty image on error
-        image = cv::Mat();
-    }
     return;
 }
 
