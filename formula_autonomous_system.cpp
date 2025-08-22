@@ -25,7 +25,7 @@ void RoiExtractor::extractRoi(const pcl::PointCloud<pcl::PointXYZ>::Ptr& input_c
     roi_cloud->header = input_cloud->header;
 
     for (const auto& point : input_cloud->points) {
-
+        
         // Check if point is within ROI
         if (point.x > params_->lidar_roi_x_min_ && point.x < params_->lidar_roi_x_max_ &&
             point.y > params_->lidar_roi_y_min_ && point.y < params_->lidar_roi_y_max_ &&
@@ -169,6 +169,7 @@ Clustering::Clustering(const std::shared_ptr<PerceptionParams> params)
         0,    0,                0,                1;
     
     std::cout << "Vehicle-to-Lidar transformation matrix:" << std::endl << vehicle_to_lidar_transform_ << std::endl;
+
 }
 
 Clustering::Clustering(double eps, int min_points, double min_cone_height, double max_cone_height) {
@@ -197,10 +198,10 @@ bool Clustering::extractCones(const pcl::PointCloud<pcl::PointXYZ>::Ptr& input_p
             
             // Convert centroid to vehicle base frame
             Eigen::Vector4f centroid_4d(centroid.x(), centroid.y(), centroid.z(), 1.0f);
-            Eigen::Vector4f centroid_lidar = vehicle_to_lidar_transform_ * centroid_4d;
+            Eigen::Vector4f centroid_vehicle = vehicle_to_lidar_transform_ * centroid_4d;
             
             // Assign centroid to cone
-            cone.center = pcl::PointXYZ(centroid_lidar.x(), centroid_lidar.y(), centroid_lidar.z());
+            cone.center = pcl::PointXYZ(centroid_vehicle.x(), centroid_vehicle.y(), centroid_vehicle.z());
             cone.color = "unknown"; // Initial color is unknown
             cone.confidence = std::min(1.0f, static_cast<float>(cluster.size()) / 50.0f);
             
@@ -1035,7 +1036,7 @@ void StateMachine::logStateTransition(ASState from, ASState to, const std::strin
               << " (Reason: " << reason << ")" << std::endl;
 } 
 
-// ==================== Trajectory Generator ====================
+// ==================== Local Planning ====================
 
 
 TrajectoryGenerator::TrajectoryGenerator(const std::shared_ptr<TrajectoryParams>& params)
@@ -1051,120 +1052,121 @@ TrajectoryGenerator::TrajectoryGenerator(const std::shared_ptr<TrajectoryParams>
 
 std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(const std::vector<Cone>& cones, ASState planning_state)
 {
-    if(planning_state == ASState::AS_DRIVING){
-        auto trajectory = generateConesTrajectory(cones);
-        return trajectory;
-    }
-    else {
-        auto trajectory = generateStopTrajectory();
-        return trajectory;
-    }
-
-}
-
-std::vector<TrajectoryPoint> TrajectoryGenerator::generateConesTrajectory(const std::vector<Cone>& cones)
-{
     last_trajectory_.clear();
+
+    if (planning_state != ASState::AS_DRIVING) {
+        return generateStopTrajectory();
+    }
     
-    // 1. 입력 콘들이 이미 로컬 좌표계 (차량 중심이 원점, 전방이 x축)
     std::vector<Eigen::Vector2d> blue_cones_local, yellow_cones_local;
-    
+
+    // Filter cones based on color and position
     for (const auto& cone : cones) {
-        Eigen::Vector2d cone_pos(cone.center.x, cone.center.y);
-        
-        // 전방에 있는 콘만 고려
-        if (cone_pos.x() > 0.0) {
+        if (cone.center.x > 0.0) { // Only consider cones in front of the vehicle
             if (cone.color == "blue") {
-                blue_cones_local.push_back(cone_pos);
+                blue_cones_local.push_back(Eigen::Vector2d(cone.center.x, cone.center.y));
             } else if (cone.color == "yellow") {
-                yellow_cones_local.push_back(cone_pos);
+                yellow_cones_local.push_back(Eigen::Vector2d(cone.center.x, cone.center.y));
             }
         }
     }
     
+    // If no cones are detected, generate a default trajectory
     if (blue_cones_local.empty() && yellow_cones_local.empty()) {
-        // 콘이 없으면 직진 경로 생성
-        int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_) + 1;
-        for (int i = 0; i < num_points; ++i) {
+        int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_);
+        for (int i = 0; i <= num_points; ++i) {
             double x = i * params_->waypoint_spacing_;
             last_trajectory_.emplace_back(x, 0.0, 0.0, 0.0, params_->default_speed_, x);
         }
         return last_trajectory_;
     }
     
-    // 2. 로컬 좌표계에서 경로 생성
     std::vector<Eigen::Vector2d> path_points;
-    path_points.push_back(Eigen::Vector2d(0.0, 0.0)); // 차량 위치 (원점)
-    
-    // 전방 지점들에 대해 중앙점 계산
+
+    // Start with the vehicle's current position
+    path_points.push_back(Eigen::Vector2d(0.0, 0.0));
+
     int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_);
     for (int i = 1; i <= num_points; ++i) {
         double target_x = i * params_->waypoint_spacing_;
         
-        // 해당 전방 거리에서 가장 가까운 파란 콘과 노란 콘 찾기
         Eigen::Vector2d* closest_blue = nullptr;
         Eigen::Vector2d* closest_yellow = nullptr;
-        double min_blue_dist = 999.0, min_yellow_dist = 999.0;
+        double min_blue_dist = 1.5, min_yellow_dist = 1.5;
         
-        // 파란 콘 찾기
+        // Find the closest blue and yellow cones to the target x position
         for (auto& cone_pos : blue_cones_local) {
             double dist = std::abs(cone_pos.x() - target_x);
-            if (dist < min_blue_dist && cone_pos.x() > 0.0 && cone_pos.x() < params_->max_cone_distance_) {
+            if (dist < min_blue_dist) {
                 min_blue_dist = dist;
                 closest_blue = &cone_pos;
             }
         }
-        
-        // 노란 콘 찾기
         for (auto& cone_pos : yellow_cones_local) {
             double dist = std::abs(cone_pos.x() - target_x);
-            if (dist < min_yellow_dist && cone_pos.x() > 0.0 && cone_pos.x() < params_->max_cone_distance_) {
+            if (dist < min_yellow_dist) {
                 min_yellow_dist = dist;
                 closest_yellow = &cone_pos;
             }
         }
         
-        // 경로점 계산 (로컬 좌표계)
-        Eigen::Vector2d waypoint;
+        Eigen::Vector2d waypoint(target_x, 0.0);
+
+        // Calculate the y position based on the closest cones
         if (closest_blue && closest_yellow) {
-            // 양쪽 콘이 있으면 중앙점 (safety_margin_ 고려 가능)
-            waypoint.x() = target_x;
             waypoint.y() = (closest_blue->y() + closest_yellow->y()) * 0.5;
+
         } else if (closest_blue) {
-            // 파란 콘(좌측)만 있으면 우측으로 lane_offset만큼 떨어진 점
-            waypoint.x() = target_x;
-            waypoint.y() = closest_blue->y() - params_->lane_offset_; // 우측
+            waypoint.y() = closest_blue->y() - params_->lane_offset_;
+
         } else if (closest_yellow) {
-            // 노란 콘(우측)만 있으면 좌측으로 lane_offset만큼 떨어진 점
-            waypoint.x() = target_x;
-            waypoint.y() = closest_yellow->y() + params_->lane_offset_; // 좌측
-        } else {
-            // 콘이 없으면 직진
-            waypoint.x() = target_x;
-            waypoint.y() = 0.0;
+            waypoint.y() = closest_yellow->y() + params_->lane_offset_;
+
+        } else if (!path_points.empty()) {
+            waypoint.y() = path_points.back().y();
         }
-        
         path_points.push_back(waypoint);
     }
     
-    // 3. 로컬 좌표계에서 궤적점 생성
-    for (size_t i = 0; i < path_points.size(); ++i) {
-        double local_yaw = 0.0;
-        if (i < path_points.size() - 1) {
-            Eigen::Vector2d dir = path_points[i + 1] - path_points[i];
-            local_yaw = atan2(dir.y(), dir.x());
-        } else if (i > 0) {
-            Eigen::Vector2d dir = path_points[i] - path_points[i - 1];
-            local_yaw = atan2(dir.y(), dir.x());
+    // Generate trajectory points from the path
+    if (path_points.size() >= 2) {
+
+        std::vector<double> x_pts, y_pts;
+
+        for (const auto& pt : path_points) {
+            x_pts.push_back(pt.x());
+            y_pts.push_back(pt.y());
         }
         
-        last_trajectory_.emplace_back(
-            path_points[i].x(), path_points[i].y(), 
-            local_yaw, 0.0, params_->default_speed_, path_points[i].x()
-        );
+        for (size_t i = 1; i < x_pts.size(); ++i) {
+            if (x_pts[i] <= x_pts[i-1]) {
+                x_pts[i] = x_pts[i-1] + 0.01;
+            }
+        }
+
+        tk::spline s;
+        s.set_points(x_pts, y_pts);
+
+        for (double current_dist = 0; current_dist < params_->lookahead_distance_; current_dist += 0.5) {
+            double x = current_dist;
+            double y = s(x);
+            double x_next = x + 0.01;
+            double y_next = s(x_next);
+            double yaw = std::atan2(y_next - y, x_next - x);
+            double curvature = calculateCurvature(s, x);
+
+            last_trajectory_.emplace_back(x, y, yaw, curvature, params_->default_speed_, current_dist);
+        }
     }
     
     return last_trajectory_;
+}
+
+// Calculate curvature using the second derivative of the spline
+double TrajectoryGenerator::calculateCurvature(const tk::spline& s, double x) {
+    double dx = s.deriv(1, x);  // first derivative (y')
+    double ddx = s.deriv(2, x); // second derivative (y'')
+    return std::abs(ddx) / std::pow(1 + dx * dx, 1.5);
 }
 
 std::vector<TrajectoryPoint> TrajectoryGenerator::generateStopTrajectory()
@@ -1215,6 +1217,76 @@ void TrajectoryGenerator::printTrajectoryStats() const
     }
     std::cout << "=====================================" << std::endl;
 } 
+
+// ==================== Mapping ====================
+MapManager::MapManager(const std::shared_ptr<TrajectoryParams>& params) : params_(params) {}
+
+std::vector<Cone> MapManager::updateAndGetPlannedCones(const VehicleState& current_state, const std::vector<Cone>& real_time_cones) {
+    {
+        // mutex lock to protect cone memory
+        std::lock_guard<std::mutex> lock(cone_memory_mutex_);
+        
+        // Current vehicle position and orientation (global frame)
+        double vehicle_x = current_state.position.x();
+        double vehicle_y = current_state.position.y();
+        double vehicle_yaw = current_state.yaw;
+
+        for (const auto& local_cone : real_time_cones) {
+            Cone global_cone = local_cone;
+            global_cone.center.x = vehicle_x + local_cone.center.x * std::cos(vehicle_yaw) - local_cone.center.y * std::sin(vehicle_yaw);
+            global_cone.center.y = vehicle_y + local_cone.center.x * std::sin(vehicle_yaw) + local_cone.center.y * std::cos(vehicle_yaw);
+
+            bool found_in_memory = false;
+
+            for (auto& mem_cone : cone_memory_) {
+                double dist = std::hypot(global_cone.center.x - mem_cone.center.x, global_cone.center.y - mem_cone.center.y);
+
+                if (dist < params_->cone_memory_association_threshold_) { // Flag to check if cone is already in memory
+                    mem_cone.center.x = (mem_cone.center.x * 0.9) + (global_cone.center.x * 0.1);
+                    mem_cone.center.y = (mem_cone.center.y * 0.9) + (global_cone.center.y * 0.1);
+                    found_in_memory = true;
+                    break;
+                }
+            }
+
+            // Update cone memory only if not found
+            if (!found_in_memory) {
+                cone_memory_.push_back(global_cone);
+            }
+        }
+    }
+
+    //
+    std::vector<Cone> cones_for_planning = real_time_cones;
+    {
+        // mutex lock to protect cone memory
+        std::lock_guard<std::mutex> lock(cone_memory_mutex_);
+
+        // Vehicle position and orientation (global frame)
+        double vehicle_x = current_state.position.x();
+        double vehicle_y = current_state.position.y();
+        double vehicle_yaw = current_state.yaw;
+
+        for (const auto& global_cone : cone_memory_) {
+            double dist_to_car = std::hypot(global_cone.center.x - vehicle_x, global_cone.center.y - vehicle_y);
+
+            // Check if the cone is within the search radius and in front of the vehicle
+            if (dist_to_car < params_->cone_memory_search_radius_) {
+                Cone local_cone = global_cone;
+                double dx = global_cone.center.x - vehicle_x;
+                double dy = global_cone.center.y - vehicle_y;
+                local_cone.center.x = dx * std::cos(-vehicle_yaw) - dy * std::sin(-vehicle_yaw);
+                local_cone.center.y = dx * std::sin(-vehicle_yaw) + dy * std::cos(-vehicle_yaw);
+                
+                // Only consider cones in front of the vehicle
+                if (local_cone.center.x > 0) {
+                    cones_for_planning.push_back(local_cone);
+                }
+            }
+        }
+    }
+    return cones_for_planning;
+}
 
 // ==================== Control ====================
 
@@ -1427,6 +1499,9 @@ bool FormulaAutonomousSystem::init(ros::NodeHandle& pnh){
     // Local planning
     trajectory_generator_ = std::make_unique<TrajectoryGenerator>(local_planning_params_);
 
+    // Mapping
+    map_manager_ = std::make_unique<MapManager>(local_planning_params_);
+
     // Control
     if (control_params_->lateral_controller_type_ == "Stanley") { 
         lateral_controller_ = std::make_unique<Stanley>(control_params_);
@@ -1563,23 +1638,24 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
 
     // Planning
     planning_state_ = state_machine_->getCurrentState();
-
-    // Local planning: Trajectory generator
-    trajectory_points_ = trajectory_generator_->generateTrajectory(cones_, planning_state_);
-    
-    // Control
-    // 1. 측위 모듈로부터 현재 차량 상태를 가져옵니다.
-    auto current_pose = localization_->getCurrentPose(); // return type: Eigen::Vector3d(x, y, yaw)
-    auto current_vel = localization_->getCurrentVelocity(); // 이 함수가 속력(double)을 반환함
+    auto current_pose = localization_->getCurrentPose(); 
+    auto current_vel = localization_->getCurrentVelocity();
     VehicleState vehicle_state(current_pose.x(), current_pose.y(), current_pose.z(), current_vel);
 
-    // 2. 횡방향 제어: 경로와 현재 상태를 기반으로 조향각 계산
+    // Mapping
+    std::vector<Cone> cones_for_planning = map_manager_->updateAndGetPlannedCones(vehicle_state, cones_);
+
+    // Local planning
+    trajectory_points_ = trajectory_generator_->generateTrajectory(cones_for_planning, planning_state_);
+    
+    // Control
+    // 1. 횡방향 제어: 경로와 현재 상태를 기반으로 조향각 계산
     double steering_angle = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_);
 
-    // 3. 종방향 제어: 목표 속도와 현재 속도를 기반으로 스로틀 계산
+    // 2. 종방향 제어: 목표 속도와 현재 속도를 기반으로 스로틀 계산
     double throttle = longitudinal_controller_->calculate(trajectory_points_[0].speed, vehicle_state.speed);
 
-    // 4. 계산된 제어 명령을 멤버 변수에 저장
+    // 3. 계산된 제어 명령을 멤버 변수에 저장
     control_command_msg.steering = -steering_angle; // FSDS 좌표계에 맞게 음수(-) 적용
     if (throttle > 0.0){
         control_command_msg.throttle = throttle;
