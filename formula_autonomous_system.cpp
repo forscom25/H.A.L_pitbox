@@ -866,16 +866,29 @@ void Localization::updateGps(const Eigen::Vector2d& gps_wgs84, double curr_time_
     state_[0] = gps_enu[0]; // x
     state_[1] = gps_enu[1]; // y
 
-    // Update velocity
+    // Update velocity with complementary filter(GPS + IMU)
     double dt_gps = curr_time_sec - prev_gps_time_sec_;
     if (dt_gps > 0.0 && curr_time_sec > std::numeric_limits<double>::epsilon()) {
         double dx = state_[0] - prev_gps_enu_[0];
         double dy = state_[1] - prev_gps_enu_[1];
         prev_gps_enu_ << state_[0], state_[1];
-        double vx = dx / dt_gps;
-        double vy = dy / dt_gps;
-        state_[3] = params_->alpha_velocity_ * state_[3] + (1-params_->alpha_velocity_) * (vx * cos(-state_[2]) - vy * sin(-state_[2])); // longitudinal velocity
-        state_[4] = params_->alpha_velocity_ * state_[4] + (1-params_->alpha_velocity_) * (vx * sin(-state_[2]) + vy * cos(-state_[2])); // lateral velocity
+
+        // Calculate velocity in ENU frame
+        double vx_enu = dx / dt_gps;
+        double vy_enu = dy / dt_gps;
+
+        // Transform velocity to vehicle frame
+        double vx_vehicle =  vx_enu * cos(-state_[2]) - vy_enu * sin(-state_[2]);
+        double vy_vehicle =  vx_enu * sin(-state_[2]) + vy_enu * cos(-state_[2]);
+
+        // Recall IMU velocity
+        double predicted_vx = state_[3];
+        double predicted_vy = state_[4];
+
+        // Apply complementary filter to fuse GPS and IMU velocities
+        state_[3] = (1.0 - params_->gps_correction_gain_) * predicted_vx + params_->gps_correction_gain_ * vx_vehicle; // longitudinal velocity
+        state_[4] = (1.0 - params_->gps_correction_gain_) * predicted_vy + params_->gps_correction_gain_ * vy_vehicle; // lateral velocity
+
         // Update previous GPS position
         prev_gps_enu_ << state_[0], state_[1];
     }
@@ -1221,7 +1234,14 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(const std::
             double yaw = std::atan2(y_next - y, x_next - x);
             double curvature = calculateCurvature(s, x);
 
-            last_trajectory_.emplace_back(x, y, yaw, curvature, params_->default_speed_, current_dist);
+            // Adjust speed based on curvature
+            double desired_speed = params_->max_speed_ / (1.0 + params_->curvature_gain_ * std::abs(curvature));
+
+            // Clamp speed to min and max limits
+            double target_speed = std::max(params_->min_speed_, std::min(desired_speed, params_->max_speed_));
+
+            // Add trajectory point
+            last_trajectory_.emplace_back(x, y, yaw, curvature, target_speed, current_dist);
         }
     }
     

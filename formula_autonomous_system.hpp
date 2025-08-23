@@ -1261,7 +1261,7 @@ struct LocalizationParams
     double ref_wgs84_altitude_;      // Reference altitude (meters)
 
     // =================== Velocity Estimation ===================
-    double alpha_velocity_;
+    double gps_correction_gain_;
 
     // Print parameters for debugging
     void print() const {
@@ -1273,18 +1273,18 @@ struct LocalizationParams
         printf("  Altitude: %.3fm\n", ref_wgs84_altitude_);
 
         printf("\n[Velocity Estimation]\n");
-        printf("  Alpha velocity: %.6f\n", alpha_velocity_);
+        printf("  GPS correction gain: %.6f\n", gps_correction_gain_);
     }
 
     bool getParameters(ros::NodeHandle& pnh){
         std::cout << "FormulaAutonomousSystem: Localization parameters file updated" << std::endl;
         
         // =================== Localization Parameters ===================
-        if(!pnh.getParam("/localization/localization/use_user_defined_ref_wgs84_position", use_user_defined_ref_wgs84_position_)){std::cerr<<"Param localization/use_user_defined_ref_wgs84_position has error" << std::endl; return false;}
-        if(!pnh.getParam("/localization/localization/ref_wgs84_latitude", ref_wgs84_latitude_)){std::cerr<<"Param localization/ref_wgs84_latitude has error" << std::endl; return false;}
-        if(!pnh.getParam("/localization/localization/ref_wgs84_longitude", ref_wgs84_longitude_)){std::cerr<<"Param localization/ref_wgs84_longitude has error" << std::endl; return false;}
-        if(!pnh.getParam("/localization/localization/ref_wgs84_altitude", ref_wgs84_altitude_)){std::cerr<<"Param localization/ref_wgs84_altitude has error" << std::endl; return false;}
-        if(!pnh.getParam("/localization/localization/alpha_velocity", alpha_velocity_)){std::cerr<<"Param localization/alpha_velocity has error" << std::endl; return false;}
+        if(!pnh.getParam("/localization/use_user_defined_ref_wgs84_position", use_user_defined_ref_wgs84_position_)){std::cerr<<"Param localization/use_user_defined_ref_wgs84_position has error" << std::endl; return false;}
+        if(!pnh.getParam("/localization/ref_wgs84_latitude", ref_wgs84_latitude_)){std::cerr<<"Param localization/ref_wgs84_latitude has error" << std::endl; return false;}
+        if(!pnh.getParam("/localization/ref_wgs84_longitude", ref_wgs84_longitude_)){std::cerr<<"Param localization/ref_wgs84_longitude has error" << std::endl; return false;}
+        if(!pnh.getParam("/localization/ref_wgs84_altitude", ref_wgs84_altitude_)){std::cerr<<"Param localization/ref_wgs84_altitude has error" << std::endl; return false;}
+        if(!pnh.getParam("/localization/gps_correction_gain", gps_correction_gain_)){std::cerr<<"Param localization/gps_correction_gain has error" << std::endl; return false;}
 
         return true;
     }
@@ -1306,8 +1306,13 @@ struct TrajectoryParams {
     double safety_margin_;          // Safety margin from cones (m)
 
     // =================== Cone Memory Parameters ===================
-    double cone_memory_search_radius_;
-    double cone_memory_association_threshold_;
+    double cone_memory_search_radius_;              // Search radius for associating new cones with memory (m)
+    double cone_memory_association_threshold_;      // Minimum association confidence to consider a match
+
+    // =================== Curvature-based Speed Planning Parameters ===================
+    double max_speed_;              // maximum speed (m/s)
+    double min_speed_;              // minimum speed (m/s)
+    double curvature_gain_;         // curvature gain for speed adjustment
 
     // Print current parameters
     void print() const {
@@ -1320,6 +1325,9 @@ struct TrajectoryParams {
         printf("Safety margin: %.3f m\n", safety_margin_);
         printf("Cone memory search radius: %.3f m\n", cone_memory_search_radius_);
         printf("Cone memory association threshold: %.3f m\n", cone_memory_association_threshold_);
+        printf("Max speed: %.3f m/s\n", max_speed_);
+        printf("Min speed: %.3f m/s\n", min_speed_);
+        printf("Curvature gain: %.3f\n", curvature_gain_);
     }
     
     // Load parameters from ROS NodeHandle
@@ -1335,6 +1343,9 @@ struct TrajectoryParams {
         if(!pnh.getParam("/local_planning/trajectory/safety_margin", safety_margin_)){std::cerr<<"Param local_planning/trajectory/safety_margin has error" << std::endl; return false;}
         if(!pnh.getParam("/local_planning/trajectory/cone_memory_search_radius", cone_memory_search_radius_)){std::cerr<<"Param local_planning/trajectory/cone_memory_search_radius has error" << std::endl; return false;}
         if(!pnh.getParam("/local_planning/trajectory/cone_memory_association_threshold", cone_memory_association_threshold_)){std::cerr<<"Param local_planning/trajectory/cone_memory_association_threshold has error" << std::endl; return false;}
+        if(!pnh.getParam("/local_planning/trajectory/max_speed", max_speed_)){std::cerr<<"Param local_planning/trajectory/max_speed has error" << std::endl; return false;}
+        if(!pnh.getParam("/local_planning/trajectory/min_speed", min_speed_)){std::cerr<<"Param local_planning/trajectory/min_speed has error" << std::endl; return false;}
+        if(!pnh.getParam("/local_planning/trajectory/curvature_gain", curvature_gain_)){std::cerr<<"Param local_planning/trajectory/curvature_gain has error" << std::endl; return false;}
 
         return true;
     }
@@ -1347,18 +1358,17 @@ struct ControlParams {
     std::string lateral_controller_type_;
     
     // =================== Lateral Control: Pure Pursuit ===================
-    double pp_lookahead_distance_;    // 전방 주시 거리 (m)
-    double pp_max_steer_angle_;       // 최대 조향각 (rad)
+    double pp_lookahead_distance_;    // lookahead distance (m)
+    double pp_max_steer_angle_;       // maximum steering angle (radians)
 
     // ===================  Stanley Controller Parameters =================== 
-    double stanley_k_gain_; // Stanley 제어기 K 게인
+    double stanley_k_gain_; // Stanley controller gain k
 
     // =================== Longitudinal Control: PID Controller ===================
-    double target_speed_;             // 목표 속도 (m/s)
-    double pid_kp_;                   // 속도 제어용 PID - Kp
-    double pid_ki_;                   // 속도 제어용 PID - Ki
-    double pid_kd_;                   // 속도 제어용 PID - Kd
-    double max_throttle_;             // 최대 스로틀 값 (0.0 ~ 1.0)
+    double pid_kp_;                   // proportional gain
+    double pid_ki_;                   // integral gain
+    double pid_kd_;                   // differential gain
+    double max_throttle_;             // maximum throttle (0.0 to 1.0)
     
     // =================== Vehicle Specification ===================
     double vehicle_length_;           // 차량 축거 (Wheelbase) (m)
@@ -1377,12 +1387,11 @@ struct ControlParams {
         if(!pnh.getParam("/control/Stanley/k_gain", stanley_k_gain_)){std::cerr<<"Param control/Stanley/k_gain has error" << std::endl; return false;}
         
         // =================== Longitudinal Control: PID Controller ===================
-        if(!pnh.getParam("/control/SpeedControl/target_speed", target_speed_)){std::cerr<<"Param control/SpeedControl/target_speed has error" << std::endl; return false;}
         if(!pnh.getParam("/control/SpeedControl/pid_kp", pid_kp_)){std::cerr<<"Param control/SpeedControl/pid_kp has error" << std::endl; return false;}
         if(!pnh.getParam("/control/SpeedControl/pid_ki", pid_ki_)){std::cerr<<"Param control/SpeedControl/pid_ki has error" << std::endl; return false;}
         if(!pnh.getParam("/control/SpeedControl/pid_kd", pid_kd_)){std::cerr<<"Param control/SpeedControl/pid_kd has error" << std::endl; return false;}
         if(!pnh.getParam("/control/SpeedControl/max_throttle", max_throttle_)){std::cerr<<"Param control/SpeedControl/max_throttle has error" << std::endl; return false;}
-
+        
         if(!pnh.getParam("/control/Vehicle/wheel_base", vehicle_length_)){std::cerr<<"Param control/Vehicle/wheel_base has error" << std::endl; return false;}
         
         return true;
