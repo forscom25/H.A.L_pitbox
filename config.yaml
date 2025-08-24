@@ -14,7 +14,7 @@ perception:
   lidar_roi_extraction:
     # LiDAR ROI extraction parameters
     x_min: 0.0
-    x_max: 50.0
+    x_max: 60.0
     y_min: -30.0
     y_max: 30.0
     z_min: -10.0
@@ -57,13 +57,22 @@ perception:
     principal_point_x: 320.0
     principal_point_y: 240.0
 
-  camera_extrinsics:
-    # Camera position relative to vehicle base (meters, degrees)
+  camera1_extrinsics:
+    # Camera 1 (Left) position relative to vehicle base (meters, degrees)
+    translation_x: -0.43
+    translation_y: 0.15
+    translation_z: 0.82
+    rotation_roll: 0.0
+    rotation_pitch: 0.0
+    rotation_yaw: 0.0
+
+  camera2_extrinsics:
+    # Camera 2 (Right) position relative to vehicle base (meters, degrees)
     translation_x: -0.43
     translation_y: -0.15
     translation_z: 0.82
     rotation_roll: 0.0
-    rotation_pitch: -30.0
+    rotation_pitch: 0.0
     rotation_yaw: 0.0
 
   camera_image_processing:
@@ -73,7 +82,7 @@ perception:
     bilateral_filter_diameter: 9
 
   camera_hsv_window_size:
-    window_size: 15
+    window_size: 20
 
   camera_hsv_yellow:
     # HSV thresholds for yellow cone detection
@@ -97,21 +106,16 @@ perception:
     value_min: 100
 
 localization:
-  # ===========================================
-  # Localization Parameters
-  # ===========================================
-  
-  localization:
-    # Reference WGS84 Position
-    # if user defined position is true then use ref_wgs84_latitude, ref_wgs84_longitude, ref_wgs84_altitude
-    # if not then use initial gps position as reference position
-    use_user_defined_ref_wgs84_position: true
-    ref_wgs84_latitude: 47.641467991978416
-    ref_wgs84_longitude: -122.14016501105924
-    ref_wgs84_altitude: 0.0
+  # Reference WGS84 Position
+  # if user defined position is true then use ref_wgs84_latitude, ref_wgs84_longitude, ref_wgs84_altitude
+  # if not then use initial gps position as reference position
+  use_user_defined_ref_wgs84_position: true
+  ref_wgs84_latitude: 47.641467991978416
+  ref_wgs84_longitude: -122.14016501105924
+  ref_wgs84_altitude: 0.0
     
-    # Velocity Estimation
-    alpha_velocity: 0.1
+  # Velocity Estimation
+  gps_correction_gain: 0.1
 
 behavior_planning:
   default: {}
@@ -120,20 +124,33 @@ local_planning:
   trajectory:
     # Basic trajectory generation
     lookahead_distance: 20.0
-    waypoint_spacing: 2.0
+    waypoint_spacing: 0.5
     default_speed: 3.0
     
     # Cone-based path planning (meters)
-    max_cone_distance: 25.0
+    max_cone_distance: 200
     lane_offset: 2.0
     
     # Safety parameters (meters)
     safety_margin: 0.5
 
+    # Cone memory parameters (meters)
+    cone_memory_search_radius: 10.0z`
+    cone_memory_association_threshold: 1.0
+
+    # Curvature-based speed planning
+    max_speed: 3.0
+    min_speed: 1.0
+    curvature_gain: 5.0
+
+    # Lap 2+ (Racing Mode) speed planning
+    racing_max_speed: 5.0 # 레이싱 모드 최고 속도
+    racing_min_speed: 2.0 # 레이싱 모드 최저 속도
+
 control:
   ControllerSelection:
     # lateral_controller_type: "PurePursuit", "Stanley"
-    lateral_controller_type: "PurePursuit" 
+    lateral_controller_type: "Stanley" 
 
   PurePursuit:
     lookahead_distance: 5.0
@@ -143,11 +160,13 @@ control:
     k_gain: 0.7
 
   SpeedControl:
-    target_speed: 1.0
-    pid_kp: 0.3
-    pid_ki: 0.0
-    pid_kd: 0.01
-    max_throttle: 0.4
-
+    # ===============================================
+    # PID Speed Control Parameters
+    # ===============================================
+    pid_kp: 0.5
+    pid_ki: 0.01
+    pid_kd: 0.02
+    max_throttle: 0.25
+    steering_based_speed_gain: 2.0
   Vehicle:
     wheel_base: 1.55
