@@ -1,10 +1,11 @@
 /**
- * @file formula_autonomous_system_node.hpp
+ * @file formula_autonomous_system.hpp
  * @author Jiwon Seok (jiwonseok@hanyang.ac.kr)
  * @brief 
- * @version 0.4
- * @date 2025-08-20
- * * @copyright Copyright (c) 2025
+ * @version 0.1
+ * @date 2025-07-21
+ * 
+ * @copyright Copyright (c) 2025
  */
 
 #ifndef FORMULA_AUTONOMOUS_SYSTEM_NODE_HPP
@@ -132,9 +133,10 @@ public: // Function components
     void publishDetectedConesMarker();
     void publishProjectedConesImage();
     void publishCenterLineMarker();
-    void publishLaneMarkers(); 
-    void publishConeMemoryMarker(); // 콘 메모리 시각화 함수 선언
-    
+    void publishLapCountMarker();           //lap counter
+    void publishStoredConesMarker();        // stored cones
+    void publishTrackLanesMarker();         // track lanes
+    void publishStartFinishLineMarker();    // finish line
 
 // Variables
 private:
@@ -186,9 +188,11 @@ public: // ROS
     ros::Publisher detected_cones_marker_pub_;
     ros::Publisher projected_cones_image_pub_;
     ros::Publisher center_line_marker_pub_;
-    ros::Publisher lap_count_marker_pub_;
-    ros::Publisher lane_marker_pub_; 
-    ros::Publisher cone_memory_marker_pub_; // 콘 메모리 시각화 퍼블리셔 추가
+    
+    ros::Publisher lap_count_marker_pub_;           // lap counter
+    ros::Publisher stored_cones_marker_pub_;        // stored cones
+    ros::Publisher track_lanes_marker_pub_;         // track lanes
+    ros::Publisher start_finish_line_marker_pub_;   // finish line
 
     // Output messages
     fs_msgs::ControlCommand control_command_msg_;
