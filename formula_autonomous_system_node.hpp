@@ -133,7 +133,10 @@ public: // Function components
     void publishDetectedConesMarker();
     void publishProjectedConesImage();
     void publishCenterLineMarker();
-    
+    void publishLapCountMarker();           //lap counter
+    void publishStoredConesMarker();        // stored cones
+    void publishTrackLanesMarker();         // track lanes
+    void publishStartFinishLineMarker();    // finish line
 
 // Variables
 private:
@@ -185,7 +188,11 @@ public: // ROS
     ros::Publisher detected_cones_marker_pub_;
     ros::Publisher projected_cones_image_pub_;
     ros::Publisher center_line_marker_pub_;
-    ros::Publisher lap_count_marker_pub_;
+    
+    ros::Publisher lap_count_marker_pub_;           // lap counter
+    ros::Publisher stored_cones_marker_pub_;        // stored cones
+    ros::Publisher track_lanes_marker_pub_;         // track lanes
+    ros::Publisher start_finish_line_marker_pub_;   // finish line
 
     // Output messages
     fs_msgs::ControlCommand control_command_msg_;
