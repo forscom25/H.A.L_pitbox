@@ -1019,6 +1019,132 @@ std::vector<Cone> MapManager::getGlobalConeMap() const {
     return cone_memory_; // Return a copy for thread safety
 }
 
+std::pair<std::vector<Eigen::Vector2d>, std::vector<Eigen::Vector2d>> MapManager::getTrackLanes() {
+    std::lock_guard<std::mutex> lock(cone_memory_mutex_);
+    return {left_lane_points_, right_lane_points_};
+}
+
+std::vector<Eigen::Vector2d> MapManager::sortConesByProximity(const std::vector<Eigen::Vector2d>& cones) {
+    if (cones.size() < 2) {
+        return cones; // No sorting needed
+    }
+
+    std::vector<Eigen::Vector2d> sorted_cones;
+    std::vector<Eigen::Vector2d> remaining_cones = cones;
+
+    // Start from the cone with the smallest x coordinate (closest to the vehicle)
+    auto start_it = std::min_element(remaining_cones.begin(), remaining_cones.end(),
+        [](const Eigen::Vector2d& a, const Eigen::Vector2d& b) {
+            return a.x() < b.x();
+        });
+
+    sorted_cones.push_back(*start_it);
+    remaining_cones.erase(start_it);
+    
+    // Repeat until all cones are sorted
+    while (!remaining_cones.empty()) {
+
+        Eigen::Vector2d current_point = sorted_cones.back();
+        double min_dist_sq = std::numeric_limits<double>::max();
+        auto closest_it = remaining_cones.begin();
+
+        for (auto it = remaining_cones.begin(); it != remaining_cones.end(); ++it) {
+            double dist_sq = (it->x() - current_point.x()) * (it->x() - current_point.x()) +
+                             (it->y() - current_point.y()) * (it->y() - current_point.y());
+            if (dist_sq < min_dist_sq) {
+                min_dist_sq = dist_sq;
+                closest_it = it;
+            }
+        }
+        sorted_cones.push_back(*closest_it);
+        remaining_cones.erase(closest_it);
+    }
+    return sorted_cones;
+}
+
+void MapManager::generateLanesFromMemory() {
+
+    std::lock_guard<std::mutex> lock(cone_memory_mutex_);
+    std::vector<Eigen::Vector2d> blue_cones, yellow_cones;
+    
+    for (const auto& cone : cone_memory_) {
+        if (cone.color == "blue") {
+            blue_cones.emplace_back(cone.center.x, cone.center.y);
+        } else if (cone.color == "yellow") {
+            yellow_cones.emplace_back(cone.center.x, cone.center.y);
+        }
+    }
+
+    // Sort cones by proximity
+    auto sorted_blue = sortConesByProximity(blue_cones);
+    auto sorted_yellow = sortConesByProximity(yellow_cones);
+
+    // Generate spline for left lane (blue cones)
+    left_lane_points_.clear();
+    if (sorted_blue.size() >= 3) {
+        std::vector<double> s_pts, x_pts, y_pts;
+        s_pts.push_back(0.0);
+        x_pts.push_back(sorted_blue[0].x());
+        y_pts.push_back(sorted_blue[0].y());
+
+        for (size_t i = 1; i < sorted_blue.size(); ++i) {
+            double dist = std::hypot(sorted_blue[i].x() - sorted_blue[i-1].x(), sorted_blue[i].y() - sorted_blue[i-1].y());
+            double new_s = s_pts.back() + dist;
+            if (new_s <= s_pts.back()) {
+                new_s = s_pts.back() + 0.01; // Ensure strictly increasing s values
+            }
+            s_pts.push_back(new_s);
+            x_pts.push_back(sorted_blue[i].x());
+            y_pts.push_back(sorted_blue[i].y());
+        }
+
+        tk::spline spline_x, spline_y;
+        spline_x.set_points(s_pts, x_pts);
+        spline_y.set_points(s_pts, y_pts);
+
+        double total_length = s_pts.back();
+        for (double s = 0; s < total_length; s += 0.5) {
+            left_lane_points_.emplace_back(spline_x(s), spline_y(s));
+        }
+        left_lane_points_.push_back(sorted_blue.back());
+    } else {
+        left_lane_points_ = sorted_blue; // Use raw points if not enough for spline
+    }
+
+    // Generate spline for right lane (yellow cones)
+    right_lane_points_.clear();
+    if (sorted_yellow.size() >= 3) {
+        std::vector<double> s_pts, x_pts, y_pts;
+        s_pts.push_back(0.0);
+        x_pts.push_back(sorted_yellow[0].x());
+        y_pts.push_back(sorted_yellow[0].y());
+
+        for (size_t i = 1; i < sorted_yellow.size(); ++i) {
+            double dist = std::hypot(sorted_yellow[i].x() - sorted_yellow[i-1].x(), sorted_yellow[i].y() - sorted_yellow[i-1].y());
+            double new_s = s_pts.back() + dist;
+            if (new_s <= s_pts.back()) {
+                new_s = s_pts.back() + 0.01; // Ensure strictly increasing s values
+            }
+            s_pts.push_back(new_s);
+            x_pts.push_back(sorted_yellow[i].x());
+            y_pts.push_back(sorted_yellow[i].y());
+        }
+
+        tk::spline spline_x, spline_y;
+        spline_x.set_points(s_pts, x_pts);
+        spline_y.set_points(s_pts, y_pts);
+
+        double total_length = s_pts.back();
+        for (double s = 0; s < total_length; s += 0.5) {
+            right_lane_points_.emplace_back(spline_x(s), spline_y(s));
+        }
+        right_lane_points_.push_back(sorted_yellow.back());
+    } else {
+        right_lane_points_ = sorted_yellow; // Use raw points if not enough for spline
+    }
+}
+
+
 // =================================================================================================
 // ========================================== 4. Planning ==========================================
 // =================================================================================================
@@ -1205,11 +1331,13 @@ void StateMachine::logStateTransition(ASState from, ASState to, const std::strin
 // ================== Trajectory Generator Implementation ===================
 
 TrajectoryGenerator::TrajectoryGenerator(const std::shared_ptr<PlanningParams>& params)
-    : params_(params)
-    , generated_trajectories_(0)
-    , average_generation_time_(0.0)
-    , last_generation_time_(0.0)
+    : params_(params),
+      generated_trajectories_(0),
+      average_generation_time_(0.0),
+      last_generation_time_(0.0)
 {
+    last_trajectory_.clear();
+
     std::cout << "TrajectoryGenerator: Initialized with lookahead " 
               << params_->lookahead_distance_ << "m, spacing " 
               << params_->waypoint_spacing_ << "m" << std::endl;
@@ -1334,18 +1462,6 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(const std::
     return last_trajectory_;
 }
 
-std::vector<TrajectoryPoint> TrajectoryGenerator::generateStopTrajectory()
-{
-    last_trajectory_.clear();
-    // 전방 지점들에 대해 중앙점 계산
-    int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_);
-    for (int i = 0; i < num_points; ++i) {
-        double x = i * params_->waypoint_spacing_;
-        last_trajectory_.emplace_back(x, 0.0, 0.0, 0.0, 0.0, x);
-    }
-    return last_trajectory_;
-}
-
 // Utility functions
 double TrajectoryGenerator::calculateDistance(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2) const
 {
@@ -1387,6 +1503,18 @@ void TrajectoryGenerator::printTrajectoryStats() const
         std::cout << "Maximum curvature: " << max_curvature << " (1/m)" << std::endl;
     }
     std::cout << "=====================================" << std::endl;
+}
+
+std::vector<TrajectoryPoint> TrajectoryGenerator::generateStopTrajectory()
+{
+    last_trajectory_.clear();
+    // 전방 지점들에 대해 중앙점 계산
+    int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_);
+    for (int i = 0; i < num_points; ++i) {
+        double x = i * params_->waypoint_spacing_;
+        last_trajectory_.emplace_back(x, 0.0, 0.0, 0.0, 0.0, x);
+    }
+    return last_trajectory_;
 }
 
 // ================================================================================================
@@ -1748,6 +1876,7 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
 
     // Update global cone map
     std::vector<Cone> cones_for_planning = map_manager_->updateAndGetPlannedCones(vehicle_state, cones_);
+    map_manager_->generateLanesFromMemory();
     trajectory_points_ = trajectory_generator_->generateTrajectory(cones_for_planning, planning_state_);
 
     // Behavior planning

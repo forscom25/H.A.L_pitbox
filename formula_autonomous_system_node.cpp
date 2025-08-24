@@ -69,7 +69,7 @@ bool FormulaAutonomousSystemNode::init(){
     projected_cones_image_pub_ = nh_.advertise<sensor_msgs::Image>("/fsds/projected_cones_image", 1);
     center_line_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/center_line_marker", 1);
     lap_count_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lap_count_marker", 1);
-    global_cone_map_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/global_cone_map_marker", 1);
+    lane_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lane_marker", 1);
     
     // Get parameters
     pnh_.getParam("/system/main_loop_rate", main_loop_rate_);
@@ -144,7 +144,7 @@ void FormulaAutonomousSystemNode::publish(){
     publishDetectedConesMarker();
     publishProjectedConesImage();
     publishCenterLineMarker();
-    publishGlobalConeMapMarker();
+    publishLaneMarker();
     return;
 }
 
@@ -418,47 +418,61 @@ void FormulaAutonomousSystemNode::publishCenterLineMarker(){
     return;
 }
 
-void FormulaAutonomousSystemNode::publishGlobalConeMapMarker(){
+void FormulaAutonomousSystemNode::publishLaneMarker() {
+    // Get header from a reliable source like lidar message
+    lidar_msg_mutex_.lock();
+    std_msgs::Header header = lidar_msg_.header;
+    lidar_msg_mutex_.unlock();
+    header.frame_id = "map"; // The frame should be the vehicle's base frame
+
     visualization_msgs::MarkerArray marker_array;
-    const auto& global_cones = formula_autonomous_system_->getGlobalConeMap();
-    int id = 0;
+    
+    // Get the generated lane points from the core system
+    auto lanes = formula_autonomous_system_->getGlobalTrackLanes();
+    auto left_lane_points = lanes.first;
+    auto right_lane_points = lanes.second;
 
-    for (const auto& cone : global_cones) {
-        visualization_msgs::Marker marker;
-        marker.header.frame_id = "map"; // Assuming global cones are in the "map" frame
-        marker.header.stamp = ros::Time::now();
-        marker.ns = "global_cones";
-        marker.id = id++;
-        marker.type = visualization_msgs::Marker::CYLINDER;
-        marker.action = visualization_msgs::Marker::ADD;
+    // --- Left Lane Marker (Blue) ---
+    visualization_msgs::Marker left_lane_marker;
+    left_lane_marker.header = header;
+    left_lane_marker.ns = "lanes";
+    left_lane_marker.id = 0;
+    left_lane_marker.type = visualization_msgs::Marker::LINE_STRIP;
+    left_lane_marker.action = visualization_msgs::Marker::ADD;
+    left_lane_marker.lifetime = ros::Duration(0.1);
+    left_lane_marker.pose.orientation.w = 1.0;
+    left_lane_marker.scale.x = 0.1; // Line width
+    left_lane_marker.color.b = 1.0; // Blue color
+    left_lane_marker.color.a = 1.0; // Alpha (opacity)
 
-        marker.pose.position.x = cone.center.x;
-        marker.pose.position.y = cone.center.y;
-        marker.pose.position.z = cone.center.z;
-        marker.pose.orientation.w = 1.0;
-
-        marker.scale.x = 0.3;
-        marker.scale.y = 0.3;
-        marker.scale.z = 0.5;
-
-        // Set marker color based on cone color
-        if (cone.color == "yellow") {
-            marker.color.r = 1.0; marker.color.g = 1.0; marker.color.b = 0.0;
-        } else if (cone.color == "blue") {
-            marker.color.r = 0.0; marker.color.g = 0.0; marker.color.b = 1.0;
-        } else if (cone.color == "orange") {
-            marker.color.r = 1.0; marker.color.g = 0.5; marker.color.b = 0.0;
-        } else { // unknown or any other color
-            marker.color.r = 0.5; marker.color.g = 0.5; marker.color.b = 0.5;
-        }
-        marker.color.a = 1.0;
-        marker.lifetime = ros::Duration(); // Forever
-
-        marker_array.markers.push_back(marker);
+    for (const auto& point : left_lane_points) {
+        geometry_msgs::Point p;
+        p.x = point.x();
+        p.y = point.y();
+        p.z = 0.0;
+        left_lane_marker.points.push_back(p);
     }
+    marker_array.markers.push_back(left_lane_marker);
 
-    global_cone_map_marker_pub_.publish(marker_array);
-    return;
+    // --- Right Lane Marker (Yellow) ---
+    visualization_msgs::Marker right_lane_marker = left_lane_marker; // Copy properties
+    right_lane_marker.id = 1;
+    right_lane_marker.color.b = 0.0; // Reset blue
+    right_lane_marker.color.r = 1.0; // Set red
+    right_lane_marker.color.g = 1.0; // Set green (R+G = Yellow)
+    right_lane_marker.points.clear(); // Clear points from the copied marker
+
+    for (const auto& point : right_lane_points) {
+        geometry_msgs::Point p;
+        p.x = point.x();
+        p.y = point.y();
+        p.z = 0.0;
+        right_lane_marker.points.push_back(p);
+    }
+    marker_array.markers.push_back(right_lane_marker);
+
+    // Publish the marker array
+    lane_marker_pub_.publish(marker_array);
 }
 
 int main(int argc, char** argv){

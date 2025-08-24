@@ -1644,11 +1644,19 @@ public:
 
     std::vector<Cone> updateAndGetPlannedCones(const VehicleState& current_state, const std::vector<Cone>& real_time_cones);
     std::vector<Cone> getGlobalConeMap() const;
+    void generateLanesFromMemory();
+    std::pair<std::vector<Eigen::Vector2d>, std::vector<Eigen::Vector2d>> getTrackLanes();
 
 private:
+    // Function
+    std::vector<Eigen::Vector2d> sortConesByProximity(const std::vector<Eigen::Vector2d>& cones);
+
+    // Variable
     std::shared_ptr<MappingParams> params_;
     std::vector<Cone> cone_memory_; // Memory of global cones
     mutable std::mutex cone_memory_mutex_;
+    std::vector<Eigen::Vector2d> left_lane_points_;
+    std::vector<Eigen::Vector2d> right_lane_points_;
 };
 
 // Planning
@@ -1720,29 +1728,33 @@ public:
     std::vector<TrajectoryPoint> generateTrajectory(const std::vector<Cone>& cones, ASState planning_state);
 
     /**
+     * @brief Get last generated trajectory
+     * @return Last trajectory
+     */
+    const std::vector<TrajectoryPoint>& getLastTrajectory() const { return last_trajectory_; }
+
+    /**
      * @brief Update trajectory parameters
      * @param params New parameters
      */
     void updateParams(const std::shared_ptr<PlanningParams>& params) { params_ = params; }
     
-    /**
-     * @brief Get last generated trajectory
-     * @return Last trajectory
-     */
-    const std::vector<TrajectoryPoint>& getLastTrajectory() const { return last_trajectory_; }
+    const std::shared_ptr<PlanningParams>& getParams() const { return params_; }
     
     /**
      * @brief Print trajectory statistics
      */
     void printTrajectoryStats() const;
 
+    
+
 private:
     // Utility functions
-    std::vector<TrajectoryPoint> generateStopTrajectory();
     double calculateCurvature(const tk::spline& s, double x);
     double calculateDistance(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2) const;
     double calculateAngle(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2) const;
-    
+    std::vector<TrajectoryPoint> generateStopTrajectory();
+
     // Member variables
     std::shared_ptr<PlanningParams> params_;
     std::vector<TrajectoryPoint> last_trajectory_;
@@ -1857,6 +1869,12 @@ public:
 
     std::vector<Cone> getGlobalConeMap() const;
     int getCurrentLap() const { return current_lap_; }
+    std::pair<std::vector<Eigen::Vector2d>, std::vector<Eigen::Vector2d>> getGlobalTrackLanes() const {
+        if (map_manager_) {
+            return map_manager_->getTrackLanes();
+        }
+        return {};
+    }
 
     private: // Main thread
 
