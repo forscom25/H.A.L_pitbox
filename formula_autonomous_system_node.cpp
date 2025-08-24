@@ -69,14 +69,15 @@ bool FormulaAutonomousSystemNode::init(){
     projected_cones_image_pub_ = nh_.advertise<sensor_msgs::Image>("/fsds/projected_cones_image", 1);
     center_line_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/center_line_marker", 1);
     lap_count_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lap_count_marker", 1);
-
+    global_cone_map_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/global_cone_map_marker", 1);
+    
     // Get parameters
     pnh_.getParam("/system/main_loop_rate", main_loop_rate_);
 
     // Algorithms
     formula_autonomous_system_ = std::make_unique<FormulaAutonomousSystem>();
     formula_autonomous_system_->init(pnh_);
-    
+
     is_initialized_ = true;
     return true;
 }
@@ -91,7 +92,7 @@ void FormulaAutonomousSystemNode::run(){
     if(checkEssentialMessages() == false){
         return;
     }
-
+    
     // Get lidar point cloud
     lidar_msg_mutex_.lock();
     auto lidar_msg = lidar_msg_;
@@ -143,6 +144,7 @@ void FormulaAutonomousSystemNode::publish(){
     publishDetectedConesMarker();
     publishProjectedConesImage();
     publishCenterLineMarker();
+    publishGlobalConeMapMarker();
     return;
 }
 
@@ -208,6 +210,7 @@ void FormulaAutonomousSystemNode::publishVehicleOdom(){
     odom.pose.pose.position.y = state[1];
     odom.pose.pose.position.z = 0.0;
     double yaw = state[2];
+    
     // Set rotation (orientation from yaw angle)
     tf2::Quaternion q;
     q.setRPY(0, 0, yaw);  // roll=0, pitch=0, yaw=pose[2]
@@ -255,7 +258,6 @@ void FormulaAutonomousSystemNode::publishNonGroundPointCloud(){
     non_ground_point_cloud_msg.header = header;
     non_ground_point_cloud_pub_.publish(non_ground_point_cloud_msg);
 
-    
     return;
 }
 
@@ -277,7 +279,6 @@ void FormulaAutonomousSystemNode::publishGroundPointCloud(){
 
 void FormulaAutonomousSystemNode::publishDetectedConesMarker(){
     // Publish
-
     // Get header
     lidar_msg_mutex_.lock();
     std_msgs::Header header = lidar_msg_.header;
@@ -340,7 +341,7 @@ void FormulaAutonomousSystemNode::publishProjectedConesImage(){
     cv_image.header = camera1_msg_.header;
     cv_image.encoding = sensor_msgs::image_encodings::BGR8;
     cv_image.image = formula_autonomous_system_->projected_cones_image_;
-    cv_image.toImageMsg(projected_cones_image_msg);
+    cv_image.toImageMsg(projected_cones_image_msg);  
     projected_cones_image_pub_.publish(projected_cones_image_msg);
     return;
 }
@@ -414,6 +415,49 @@ void FormulaAutonomousSystemNode::publishCenterLineMarker(){
     }
     center_line_marker.markers.push_back(marker_line);
     center_line_marker_pub_.publish(center_line_marker);
+    return;
+}
+
+void FormulaAutonomousSystemNode::publishGlobalConeMapMarker(){
+    visualization_msgs::MarkerArray marker_array;
+    const auto& global_cones = formula_autonomous_system_->getGlobalConeMap();
+    int id = 0;
+
+    for (const auto& cone : global_cones) {
+        visualization_msgs::Marker marker;
+        marker.header.frame_id = "map"; // Assuming global cones are in the "map" frame
+        marker.header.stamp = ros::Time::now();
+        marker.ns = "global_cones";
+        marker.id = id++;
+        marker.type = visualization_msgs::Marker::CYLINDER;
+        marker.action = visualization_msgs::Marker::ADD;
+
+        marker.pose.position.x = cone.center.x;
+        marker.pose.position.y = cone.center.y;
+        marker.pose.position.z = cone.center.z;
+        marker.pose.orientation.w = 1.0;
+
+        marker.scale.x = 0.3;
+        marker.scale.y = 0.3;
+        marker.scale.z = 0.5;
+
+        // Set marker color based on cone color
+        if (cone.color == "yellow") {
+            marker.color.r = 1.0; marker.color.g = 1.0; marker.color.b = 0.0;
+        } else if (cone.color == "blue") {
+            marker.color.r = 0.0; marker.color.g = 0.0; marker.color.b = 1.0;
+        } else if (cone.color == "orange") {
+            marker.color.r = 1.0; marker.color.g = 0.5; marker.color.b = 0.0;
+        } else { // unknown or any other color
+            marker.color.r = 0.5; marker.color.g = 0.5; marker.color.b = 0.5;
+        }
+        marker.color.a = 1.0;
+        marker.lifetime = ros::Duration(); // Forever
+
+        marker_array.markers.push_back(marker);
+    }
+
+    global_cone_map_marker_pub_.publish(marker_array);
     return;
 }
 

@@ -12,7 +12,10 @@
 #include "formula_autonomous_system.hpp"
 
 // ==================== Algorithm ====================
-// Perception
+
+// =================================================================================================
+// ========================================= 1. PERCEPTION =========================================
+// =================================================================================================
 
 // =================== RoiExtractor Implementation ===================
 
@@ -34,7 +37,6 @@ void RoiExtractor::extractRoi(const pcl::PointCloud<pcl::PointXYZ>::Ptr& input_c
         }
     }
 }
-
 
 // =================== GroundRemoval Implementation ===================
 
@@ -328,7 +330,7 @@ Eigen::Vector3f Clustering::calculateCentroid(const std::vector<int>& cluster_in
     return centroid;
 } 
 
-// ==================== Color Detection ====================
+// =================== ColorDetection Implementation ===================
 
 ColorDetection::ColorDetection(const std::shared_ptr<PerceptionParams>& params)
     : params_(params) {
@@ -425,6 +427,44 @@ cv::Mat ColorDetection::createTransformationMatrix(double x, double y, double z,
     return T;
 }
 
+cv::Mat ColorDetection::ConesColor(std::vector<Cone>& cones, sensor_msgs::Image& camera1_msg, sensor_msgs::Image& camera2_msg) {
+    cv::Mat camera1_image, camera2_image;
+    getCameraImage(camera1_msg, camera1_image);
+    getCameraImage(camera2_msg, camera2_image);
+
+    if (!camera1_image.empty() && !camera2_image.empty()) {
+        cones = classifyConesColor(cones, camera1_image, camera2_image);
+    }
+
+    // for debugging: visualize cones
+    cv::Mat debug_img1 = visualizeProjection(cones, camera1_image);
+    cv::Mat debug_img2 = visualizeProjection(cones, camera2_image);
+    cv::Mat combined_debug_image;
+
+    // Check if debug images are empty
+    if (!debug_img1.empty() && !debug_img2.empty()) {
+        // Resize debug images to match height
+        if (debug_img1.rows != debug_img2.rows) {
+            // Calculate the ratio and resize debug_img2 to match debug_img1 height
+            double ratio = (double)debug_img1.rows / (double)debug_img2.rows;
+            int new_width = (int)((double)debug_img2.cols * ratio);
+        
+            //  Resize debug_img2 to match debug_img1 height
+            cv::resize(debug_img2, debug_img2, cv::Size(new_width, debug_img1.rows));
+        }
+
+        cv::hconcat(debug_img1, debug_img2, combined_debug_image);
+        
+    // show one of the debug images if the other is empty
+    } else if (!debug_img1.empty()) {
+        combined_debug_image = debug_img1;
+    } else if (!debug_img2.empty()) {
+        combined_debug_image = debug_img2;
+    }
+    
+    return combined_debug_image;
+}
+
 void ColorDetection::getCameraImage(sensor_msgs::Image& msg, cv::Mat& image){
     // Convert ROS Image message to OpenCV Mat
     cv_bridge::CvImagePtr cv_ptr;
@@ -450,29 +490,6 @@ void ColorDetection::getCameraImage(sensor_msgs::Image& msg, cv::Mat& image){
         image = cv::Mat();
     }
     return;
-}
-
-std::string ColorDetection::detectConeColor(const Cone& cone, const cv::Mat& rgb_image, const cv::Point2f& projection_point) {
-    if (rgb_image.empty()) {
-        std::cerr << "Warning: Empty image provided for color detection" << std::endl;
-        return "unknown";
-    }
-    
-    // Preprocess image if enabled
-    cv::Mat processed_image = preprocessImage(rgb_image);
-    
-    // Convert to HSV for color analysis
-    cv::Mat hsv_image;
-    cv::cvtColor(processed_image, hsv_image, cv::COLOR_BGR2HSV);
-    
-    // Analyze color in window around projected point
-    int window_size = params_->camera_hsv_window_size_;
-    ColorConfidence confidence = analyzeColorWindow(hsv_image, projection_point, window_size);
-
-    // Select best color based on confidence
-    std::string best_color = selectBestColor(confidence);
-    
-    return best_color;
 }
 
 std::vector<Cone> ColorDetection::classifyConesColor(const std::vector<Cone>& cones, const cv::Mat& rgb_image1, const cv::Mat& rgb_image2) {
@@ -553,35 +570,56 @@ bool ColorDetection::isPointInImage(const cv::Point2f& point, const cv::Size& im
            point.y >= 0 && point.y < image_size.height;
 }
 
-cv::Mat ColorDetection::visualizeProjection(const std::vector<Cone>& cones, const cv::Mat& rgb_image) {
-    cv::Mat visualization = rgb_image.clone();
-    
-    for (const auto& cone : cones) {
-         // Determine camera based on y coordinate
-        int primary_camera_id = (cone.center.y >= 0) ? 1 : 2;
-        cv::Point2f projected = projectToCamera(cone.center, primary_camera_id);
-        
-        if (isPointInImage(projected, rgb_image.size())) {
-            // Draw circle at projected position
-            cv::Scalar color;
-            if (cone.color == "yellow") {
-                color = cv::Scalar(0, 255, 255); // Yellow in BGR
-            } else if (cone.color == "blue") {
-                color = cv::Scalar(255, 0, 0); // Blue in BGR
-            } else if (cone.color == "orange") {
-                color = cv::Scalar(0, 165, 255); // Orange in BGR
-            } else {
-                color = cv::Scalar(128, 128, 128); // Gray for unknown
-            }
-
-            cv::circle(visualization, projected, 10, color, 2);
-            cv::putText(visualization, cone.color, 
-                       cv::Point(projected.x + 15, projected.y), 
-                       cv::FONT_HERSHEY_SIMPLEX, 0.5, color, 1);
-        }
+std::string ColorDetection::detectConeColor(const Cone& cone, const cv::Mat& rgb_image, const cv::Point2f& projection_point) {
+    if (rgb_image.empty()) {
+        std::cerr << "Warning: Empty image provided for color detection" << std::endl;
+        return "unknown";
     }
     
-    return visualization;
+    // Preprocess image if enabled
+    cv::Mat processed_image = preprocessImage(rgb_image);
+    
+    // Convert to HSV for color analysis
+    cv::Mat hsv_image;
+    cv::cvtColor(processed_image, hsv_image, cv::COLOR_BGR2HSV);
+    
+    // Analyze color in window around projected point
+    int window_size = params_->camera_hsv_window_size_;
+    ColorConfidence confidence = analyzeColorWindow(hsv_image, projection_point, window_size);
+
+    // Select best color based on confidence
+    std::string best_color = selectBestColor(confidence);
+    
+    return best_color;
+}
+
+cv::Mat ColorDetection::preprocessImage(const cv::Mat& rgb_image) {
+    if (!params_->camera_enable_preprocessing_) {
+        return rgb_image;
+    }
+    
+    cv::Mat processed = rgb_image.clone();
+    
+    // Apply Gaussian blur for noise reduction
+    if (params_->camera_gaussian_blur_sigma_ > 0) {
+        int kernel_size = static_cast<int>(2 * params_->camera_gaussian_blur_sigma_ * 3 + 1);
+        if (kernel_size % 2 == 0) kernel_size++;
+        
+        cv::GaussianBlur(processed, processed, 
+                        cv::Size(kernel_size, kernel_size), 
+                        params_->camera_gaussian_blur_sigma_);
+    }
+    
+    // Apply bilateral filter for edge-preserving smoothing
+    if (params_->camera_bilateral_filter_d_ > 0) {
+        cv::Mat temp;
+        cv::bilateralFilter(processed, temp, 
+                           params_->camera_bilateral_filter_d_, 
+                           80, 80);
+        processed = temp;
+    }
+    
+    return processed;
 }
 
 ColorConfidence ColorDetection::analyzeColorWindow(const cv::Mat& hsv_image, const cv::Point2f& center, int window_size) {
@@ -603,6 +641,25 @@ ColorConfidence ColorDetection::analyzeColorWindow(const cv::Mat& hsv_image, con
     confidence.orange_confidence = static_cast<double>(countOrangePixels(hsv_roi));
     
     return confidence;
+}
+
+cv::Rect ColorDetection::getSafeWindow(const cv::Point2f& center, int window_size, const cv::Size& image_size) {
+    int half_size = window_size / 2;
+    
+    // Select window left-top corner
+    int x = static_cast<int>(center.x) - half_size;
+    int y = static_cast<int>(center.y) - half_size;
+    
+    // Clamp to image boundaries
+    x = std::max(0, std::min(x, image_size.width - window_size));
+    y = std::max(0, std::min(y, image_size.height - window_size));
+    
+    // Select window width and height
+    int width = std::min(window_size, image_size.width - x);
+    int height = std::min(window_size, image_size.height - y);
+    
+    // Return window [left, top, width, height]
+    return cv::Rect(x, y, width, height);
 }
 
 int ColorDetection::countYellowPixels(const cv::Mat& hsv_roi) {
@@ -665,6 +722,22 @@ int ColorDetection::countOrangePixels(const cv::Mat& hsv_roi) {
     return orange_pixels;
 }
 
+bool ColorDetection::isInHSVRange(const cv::Vec3b& hsv_pixel, int hue_min, int hue_max, int sat_min, int val_min) {
+    int hue = hsv_pixel[0];
+    int sat = hsv_pixel[1];
+    int val = hsv_pixel[2];
+    
+    // Handle hue wraparound (e.g., red: 170-180 and 0-10)
+    bool hue_in_range;
+    if (hue_min <= hue_max) {
+        hue_in_range = (hue >= hue_min && hue <= hue_max);
+    } else {
+        hue_in_range = (hue >= hue_min || hue <= hue_max);
+    }
+    
+    return hue_in_range && sat >= sat_min && val >= val_min;
+}
+
 std::string ColorDetection::selectBestColor(const ColorConfidence& confidence) {
     double max_confidence = 0.0;
     std::string best_color = "unknown";
@@ -692,110 +765,42 @@ std::string ColorDetection::selectBestColor(const ColorConfidence& confidence) {
     return best_color;
 }
 
-cv::Mat ColorDetection::preprocessImage(const cv::Mat& rgb_image) {
-    if (!params_->camera_enable_preprocessing_) {
-        return rgb_image;
-    }
+cv::Mat ColorDetection::visualizeProjection(const std::vector<Cone>& cones, const cv::Mat& rgb_image) {
+    cv::Mat visualization = rgb_image.clone();
     
-    cv::Mat processed = rgb_image.clone();
-    
-    // Apply Gaussian blur for noise reduction
-    if (params_->camera_gaussian_blur_sigma_ > 0) {
-        int kernel_size = static_cast<int>(2 * params_->camera_gaussian_blur_sigma_ * 3 + 1);
-        if (kernel_size % 2 == 0) kernel_size++;
+    for (const auto& cone : cones) {
+         // Determine camera based on y coordinate
+        int primary_camera_id = (cone.center.y >= 0) ? 1 : 2;
+        cv::Point2f projected = projectToCamera(cone.center, primary_camera_id);
         
-        cv::GaussianBlur(processed, processed, 
-                        cv::Size(kernel_size, kernel_size), 
-                        params_->camera_gaussian_blur_sigma_);
-    }
-    
-    // Apply bilateral filter for edge-preserving smoothing
-    if (params_->camera_bilateral_filter_d_ > 0) {
-        cv::Mat temp;
-        cv::bilateralFilter(processed, temp, 
-                           params_->camera_bilateral_filter_d_, 
-                           80, 80);
-        processed = temp;
-    }
-    
-    return processed;
-}
+        if (isPointInImage(projected, rgb_image.size())) {
+            // Draw circle at projected position
+            cv::Scalar color;
+            if (cone.color == "yellow") {
+                color = cv::Scalar(0, 255, 255); // Yellow in BGR
+            } else if (cone.color == "blue") {
+                color = cv::Scalar(255, 0, 0); // Blue in BGR
+            } else if (cone.color == "orange") {
+                color = cv::Scalar(0, 165, 255); // Orange in BGR
+            } else {
+                color = cv::Scalar(128, 128, 128); // Gray for unknown
+            }
 
-bool ColorDetection::isInHSVRange(const cv::Vec3b& hsv_pixel, int hue_min, int hue_max, int sat_min, int val_min) {
-    int hue = hsv_pixel[0];
-    int sat = hsv_pixel[1];
-    int val = hsv_pixel[2];
-    
-    // Handle hue wraparound (e.g., red: 170-180 and 0-10)
-    bool hue_in_range;
-    if (hue_min <= hue_max) {
-        hue_in_range = (hue >= hue_min && hue <= hue_max);
-    } else {
-        hue_in_range = (hue >= hue_min || hue <= hue_max);
-    }
-    
-    return hue_in_range && sat >= sat_min && val >= val_min;
-}
-
-cv::Rect ColorDetection::getSafeWindow(const cv::Point2f& center, int window_size, const cv::Size& image_size) {
-    int half_size = window_size / 2;
-    
-    // Select window left-top corner
-    int x = static_cast<int>(center.x) - half_size;
-    int y = static_cast<int>(center.y) - half_size;
-    
-    // Clamp to image boundaries
-    x = std::max(0, std::min(x, image_size.width - window_size));
-    y = std::max(0, std::min(y, image_size.height - window_size));
-    
-    // Select window width and height
-    int width = std::min(window_size, image_size.width - x);
-    int height = std::min(window_size, image_size.height - y);
-    
-    // Return window [left, top, width, height]
-    return cv::Rect(x, y, width, height);
-} 
-
-cv::Mat ColorDetection::ConesColor(std::vector<Cone>& cones, sensor_msgs::Image& camera1_msg, sensor_msgs::Image& camera2_msg) {
-    cv::Mat camera1_image, camera2_image;
-    getCameraImage(camera1_msg, camera1_image);
-    getCameraImage(camera2_msg, camera2_image);
-
-    if (!camera1_image.empty() && !camera2_image.empty()) {
-        cones = classifyConesColor(cones, camera1_image, camera2_image);
-    }
-
-    // for debugging: visualize cones
-    cv::Mat debug_img1 = visualizeProjection(cones, camera1_image);
-    cv::Mat debug_img2 = visualizeProjection(cones, camera2_image);
-    cv::Mat combined_debug_image;
-
-    // Check if debug images are empty
-    if (!debug_img1.empty() && !debug_img2.empty()) {
-        // Resize debug images to match height
-        if (debug_img1.rows != debug_img2.rows) {
-            // Calculate the ratio and resize debug_img2 to match debug_img1 height
-            double ratio = (double)debug_img1.rows / (double)debug_img2.rows;
-            int new_width = (int)((double)debug_img2.cols * ratio);
-        
-            //  Resize debug_img2 to match debug_img1 height
-            cv::resize(debug_img2, debug_img2, cv::Size(new_width, debug_img1.rows));
+            cv::circle(visualization, projected, 10, color, 2);
+            cv::putText(visualization, cone.color, 
+                       cv::Point(projected.x + 15, projected.y), 
+                       cv::FONT_HERSHEY_SIMPLEX, 0.5, color, 1);
         }
-
-        cv::hconcat(debug_img1, debug_img2, combined_debug_image);
-        
-    // show one of the debug images if the other is empty
-    } else if (!debug_img1.empty()) {
-        combined_debug_image = debug_img1;
-    } else if (!debug_img2.empty()) {
-        combined_debug_image = debug_img2;
     }
     
-    return combined_debug_image;
+    return visualization;
 }
 
+// =================================================================================================
+// ======================================== 2. Localization ========================================
+// =================================================================================================
 
-// ==================== Localization ====================
+// =================== Localization Implementation ===================
 
 Localization::Localization(const std::shared_ptr<LocalizationParams>& params)
     : params_(params),
@@ -816,7 +821,6 @@ Localization::Localization(const std::shared_ptr<LocalizationParams>& params)
     // Initialize state vector [x, y, yaw, vx, vy, yawrate, ax, ay]
     state_ = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 }
-
 
 /**
  * @brief Update with IMU data (acceleration, yaw rate and IMU orientation)
@@ -866,7 +870,7 @@ void Localization::updateGps(const Eigen::Vector2d& gps_wgs84, double curr_time_
     state_[0] = gps_enu[0]; // x
     state_[1] = gps_enu[1]; // y
 
-    // Update velocity with complementary filter(GPS + IMU)
+    // Correct velocity with complementary filter(GPS + IMU)
     double dt_gps = curr_time_sec - prev_gps_time_sec_;
     if (dt_gps > 0.0 && curr_time_sec > std::numeric_limits<double>::epsilon()) {
         double dx = state_[0] - prev_gps_enu_[0];
@@ -935,8 +939,91 @@ Eigen::Vector2d Localization::wgs84ToEnu(const Eigen::Vector2d& wgs84_pos) const
     return Eigen::Vector2d(x, y);
 }
 
-// ==================== Planning ====================
+// ================================================================================================
+// ========================================== 3. Mapping ==========================================
+// ================================================================================================
 
+// =================== Mapping Implementation ====================
+
+MapManager::MapManager(const std::shared_ptr<MappingParams>& params) : params_(params){}
+
+std::vector<Cone> MapManager::updateAndGetPlannedCones(const VehicleState& current_state, const std::vector<Cone>& real_time_cones) {
+    {
+        // mutex lock to protect cone memory
+        std::lock_guard<std::mutex> lock(cone_memory_mutex_);
+        
+        // Current vehicle position and orientation (global frame)
+        double vehicle_x = current_state.position.x();
+        double vehicle_y = current_state.position.y();
+        double vehicle_yaw = current_state.yaw;
+
+        for (const auto& local_cone : real_time_cones) {
+            Cone global_cone = local_cone;
+            global_cone.center.x = vehicle_x + local_cone.center.x * std::cos(vehicle_yaw) - local_cone.center.y * std::sin(vehicle_yaw);
+            global_cone.center.y = vehicle_y + local_cone.center.x * std::sin(vehicle_yaw) + local_cone.center.y * std::cos(vehicle_yaw);
+
+            bool found_in_memory = false;
+
+            for (auto& mem_cone : cone_memory_) {
+                double dist = std::hypot(global_cone.center.x - mem_cone.center.x, global_cone.center.y - mem_cone.center.y);
+
+                if (dist < params_->cone_memory_association_threshold_) { // Flag to check if cone is already in memory
+                    mem_cone.center.x = (mem_cone.center.x * 0.9) + (global_cone.center.x * 0.1);
+                    mem_cone.center.y = (mem_cone.center.y * 0.9) + (global_cone.center.y * 0.1);
+                    found_in_memory = true;
+                    break;
+                }
+            }
+
+            // Update cone memory only if not found
+            if (!found_in_memory) {
+                cone_memory_.push_back(global_cone);
+            }
+        }
+    }
+
+    //
+    std::vector<Cone> cones_for_planning = real_time_cones;
+    {
+        // mutex lock to protect cone memory
+        std::lock_guard<std::mutex> lock(cone_memory_mutex_);
+
+        // Vehicle position and orientation (global frame)
+        double vehicle_x = current_state.position.x();
+        double vehicle_y = current_state.position.y();
+        double vehicle_yaw = current_state.yaw;
+
+        for (const auto& global_cone : cone_memory_) {
+            double dist_to_car = std::hypot(global_cone.center.x - vehicle_x, global_cone.center.y - vehicle_y);
+
+            // Check if the cone is within the search radius and in front of the vehicle
+            if (dist_to_car < params_->cone_memory_search_radius_) {
+                Cone local_cone = global_cone;
+                double dx = global_cone.center.x - vehicle_x;
+                double dy = global_cone.center.y - vehicle_y;
+                local_cone.center.x = dx * std::cos(-vehicle_yaw) - dy * std::sin(-vehicle_yaw);
+                local_cone.center.y = dx * std::sin(-vehicle_yaw) + dy * std::cos(-vehicle_yaw);
+                
+                // Only consider cones in front of the vehicle
+                if (local_cone.center.x > 0) {
+                    cones_for_planning.push_back(local_cone);
+                }
+            }
+        }
+    }
+    return cones_for_planning;
+}
+
+std::vector<Cone> MapManager::getGlobalConeMap() const {
+    std::lock_guard<std::mutex> lock(cone_memory_mutex_);
+    return cone_memory_; // Return a copy for thread safety
+}
+
+// =================================================================================================
+// ========================================== 4. Planning ==========================================
+// =================================================================================================
+
+// =================== State Machine Implementation ===================
 
 StateMachine::StateMachine()
     : current_state_(ASState::AS_OFF)
@@ -1115,10 +1202,9 @@ void StateMachine::logStateTransition(ASState from, ASState to, const std::strin
               << " (Reason: " << reason << ")" << std::endl;
 } 
 
-// ==================== Local Planning ====================
+// ================== Trajectory Generator Implementation ===================
 
-
-TrajectoryGenerator::TrajectoryGenerator(const std::shared_ptr<TrajectoryParams>& params)
+TrajectoryGenerator::TrajectoryGenerator(const std::shared_ptr<PlanningParams>& params)
     : params_(params)
     , generated_trajectories_(0)
     , average_generation_time_(0.0)
@@ -1248,13 +1334,6 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(const std::
     return last_trajectory_;
 }
 
-// Calculate curvature using the second derivative of the spline
-double TrajectoryGenerator::calculateCurvature(const tk::spline& s, double x) {
-    double dx = s.deriv(1, x);  // first derivative (y')
-    double ddx = s.deriv(2, x); // second derivative (y'')
-    return std::abs(ddx) / std::pow(1 + dx * dx, 1.5);
-}
-
 std::vector<TrajectoryPoint> TrajectoryGenerator::generateStopTrajectory()
 {
     last_trajectory_.clear();
@@ -1277,6 +1356,12 @@ double TrajectoryGenerator::calculateAngle(const Eigen::Vector2d& p1, const Eige
 {
     Eigen::Vector2d diff = p2 - p1;
     return std::atan2(diff.y(), diff.x());
+}
+
+double TrajectoryGenerator::calculateCurvature(const tk::spline& s, double x) {
+    double dx = s.deriv(1, x);  // first derivative (y')
+    double ddx = s.deriv(2, x); // second derivative (y'')
+    return std::abs(ddx) / std::pow(1 + dx * dx, 1.5);
 }
 
 void TrajectoryGenerator::printTrajectoryStats() const
@@ -1302,81 +1387,14 @@ void TrajectoryGenerator::printTrajectoryStats() const
         std::cout << "Maximum curvature: " << max_curvature << " (1/m)" << std::endl;
     }
     std::cout << "=====================================" << std::endl;
-} 
-
-// ==================== Mapping ====================
-MapManager::MapManager(const std::shared_ptr<TrajectoryParams>& params) : params_(params) {}
-
-std::vector<Cone> MapManager::updateAndGetPlannedCones(const VehicleState& current_state, const std::vector<Cone>& real_time_cones) {
-    {
-        // mutex lock to protect cone memory
-        std::lock_guard<std::mutex> lock(cone_memory_mutex_);
-        
-        // Current vehicle position and orientation (global frame)
-        double vehicle_x = current_state.position.x();
-        double vehicle_y = current_state.position.y();
-        double vehicle_yaw = current_state.yaw;
-
-        for (const auto& local_cone : real_time_cones) {
-            Cone global_cone = local_cone;
-            global_cone.center.x = vehicle_x + local_cone.center.x * std::cos(vehicle_yaw) - local_cone.center.y * std::sin(vehicle_yaw);
-            global_cone.center.y = vehicle_y + local_cone.center.x * std::sin(vehicle_yaw) + local_cone.center.y * std::cos(vehicle_yaw);
-
-            bool found_in_memory = false;
-
-            for (auto& mem_cone : cone_memory_) {
-                double dist = std::hypot(global_cone.center.x - mem_cone.center.x, global_cone.center.y - mem_cone.center.y);
-
-                if (dist < params_->cone_memory_association_threshold_) { // Flag to check if cone is already in memory
-                    mem_cone.center.x = (mem_cone.center.x * 0.9) + (global_cone.center.x * 0.1);
-                    mem_cone.center.y = (mem_cone.center.y * 0.9) + (global_cone.center.y * 0.1);
-                    found_in_memory = true;
-                    break;
-                }
-            }
-
-            // Update cone memory only if not found
-            if (!found_in_memory) {
-                cone_memory_.push_back(global_cone);
-            }
-        }
-    }
-
-    //
-    std::vector<Cone> cones_for_planning = real_time_cones;
-    {
-        // mutex lock to protect cone memory
-        std::lock_guard<std::mutex> lock(cone_memory_mutex_);
-
-        // Vehicle position and orientation (global frame)
-        double vehicle_x = current_state.position.x();
-        double vehicle_y = current_state.position.y();
-        double vehicle_yaw = current_state.yaw;
-
-        for (const auto& global_cone : cone_memory_) {
-            double dist_to_car = std::hypot(global_cone.center.x - vehicle_x, global_cone.center.y - vehicle_y);
-
-            // Check if the cone is within the search radius and in front of the vehicle
-            if (dist_to_car < params_->cone_memory_search_radius_) {
-                Cone local_cone = global_cone;
-                double dx = global_cone.center.x - vehicle_x;
-                double dy = global_cone.center.y - vehicle_y;
-                local_cone.center.x = dx * std::cos(-vehicle_yaw) - dy * std::sin(-vehicle_yaw);
-                local_cone.center.y = dx * std::sin(-vehicle_yaw) + dy * std::cos(-vehicle_yaw);
-                
-                // Only consider cones in front of the vehicle
-                if (local_cone.center.x > 0) {
-                    cones_for_planning.push_back(local_cone);
-                }
-            }
-        }
-    }
-    return cones_for_planning;
 }
 
-// ==================== Control ====================
+// ================================================================================================
+// ========================================== 5. Control ==========================================
+// ================================================================================================
 
-// Lateral Control
+// ================== PurePursuit Controller Implementation ===================
+
 PurePursuit::PurePursuit(const std::shared_ptr<ControlParams>& params)
     : params_(params) {
 }
@@ -1413,7 +1431,8 @@ double PurePursuit::calculateSteeringAngleInternal(const Eigen::Vector2d& target
     return std::clamp(delta, -params_->pp_max_steer_angle_, params_->pp_max_steer_angle_);
 }
 
-// Stanley Controller
+// ================== Stanley Controller Implementation ===================
+
 Stanley::Stanley(const std::shared_ptr<ControlParams>& params) : params_(params) {}
 
 double Stanley::calculateSteeringAngle(const VehicleState& current_state, const std::vector<TrajectoryPoint>& path) const
@@ -1465,7 +1484,7 @@ double Stanley::calculateSteeringAngle(const VehicleState& current_state, const 
     return std::clamp(steering_angle, -params_->pp_max_steer_angle_, params_->pp_max_steer_angle_);
 }
 
-// Longitudinal Control
+// ==================== PID Controller Implementation ====================
 
 PIDController::PIDController(const std::shared_ptr<ControlParams>& params)
     : params_(params),
@@ -1526,7 +1545,9 @@ void PIDController::reset() {
     first_run_ = true;
 }
 
-// ==================== FormulaAutonomousSystem ====================
+// ===============================================================================================
+// =================================== FormulaAutonomousSystem ===================================
+// ===============================================================================================
 
 FormulaAutonomousSystem::FormulaAutonomousSystem():
     is_initialized_(false),
@@ -1537,7 +1558,12 @@ FormulaAutonomousSystem::FormulaAutonomousSystem():
     localization_(nullptr),
     state_machine_(nullptr),
     lateral_controller_(nullptr),
-    longitudinal_controller_(nullptr) {
+    longitudinal_controller_(nullptr),
+    is_start_finish_line_defined_(false),
+    just_crossed_line_(false),
+    current_mode_(DrivingMode::MAPPING),
+    is_global_path_generated_(false),
+    current_lap_(1) {
 }
 
 FormulaAutonomousSystem::~FormulaAutonomousSystem(){
@@ -1545,33 +1571,32 @@ FormulaAutonomousSystem::~FormulaAutonomousSystem(){
     return;
 }
 
-// init 함수는 ros node 초기화시 시행되므로 작성 필요.
+// =================== Initialization ====================
 bool FormulaAutonomousSystem::init(ros::NodeHandle& pnh){
     pnh_ = pnh;
 
-    // Get parameters
+    // Allocate memory for parameters
     perception_params_ = std::make_shared<PerceptionParams>();
     localization_params_ = std::make_shared<LocalizationParams>();
-    local_planning_params_ = std::make_shared<TrajectoryParams>();
+    mapping_params_ = std::make_shared<MappingParams>();
+    planning_params_ = std::make_shared<PlanningParams>();
     control_params_ = std::make_shared<ControlParams>();
 
-    // Get parameters
+    // Load parameters from Yaml file
     if (!getParameters()) {
         ROS_ERROR("FormulaAutonomousSystem: Failed to get parameters");
         return false;
     }
 
-    // Algorithms
-
+    // Initialize algorithm modules
     // Perception
     // LiDAR perception
     roi_extractor_ = std::make_unique<RoiExtractor>(perception_params_);
-    ground_removal_ = std::make_unique<GroundRemoval>(perception_params_);
-    clustering_ = std::make_unique<Clustering>(perception_params_);
-
     roi_point_cloud_ = std::make_unique<pcl::PointCloud<pcl::PointXYZ>>();
+    ground_removal_ = std::make_unique<GroundRemoval>(perception_params_);    
     ground_point_cloud_ = std::make_unique<pcl::PointCloud<pcl::PointXYZ>>();
     non_ground_point_cloud_ = std::make_unique<pcl::PointCloud<pcl::PointXYZ>>();
+    clustering_ = std::make_unique<Clustering>(perception_params_);
 
     // Camera perception
     color_detection_ = std::make_unique<ColorDetection>(perception_params_);
@@ -1579,14 +1604,12 @@ bool FormulaAutonomousSystem::init(ros::NodeHandle& pnh){
     // Localization
     localization_ = std::make_unique<Localization>(localization_params_);
 
+    // Mapping
+    map_manager_ = std::make_unique<MapManager>(mapping_params_);
+
     // Planning
     state_machine_ = std::make_unique<StateMachine>();
-
-    // Local planning
-    trajectory_generator_ = std::make_unique<TrajectoryGenerator>(local_planning_params_);
-
-    // Mapping
-    map_manager_ = std::make_unique<MapManager>(local_planning_params_);
+    trajectory_generator_ = std::make_unique<TrajectoryGenerator>(planning_params_);
 
     // Control
     if (control_params_->lateral_controller_type_ == "Stanley") { 
@@ -1612,8 +1635,12 @@ bool FormulaAutonomousSystem::getParameters(){
         ROS_ERROR("FormulaAutonomousSystem: Failed to get localization parameters");
         return false;
     }
-    if(local_planning_params_->getParameters(pnh_) == false){
-        ROS_ERROR("FormulaAutonomousSystem: Failed to get local planning parameters");
+    if(mapping_params_->getParameters(pnh_) == false){
+        ROS_ERROR("FormulaAutonomousSystem: Failed to get mapping parameters");
+        return false;
+    }
+    if(planning_params_->getParameters(pnh_) == false){
+        ROS_ERROR("FormulaAutonomousSystem: Failed to get planning parameters");
         return false;
     }
     if(control_params_->getParameters(pnh_) == false){
@@ -1652,28 +1679,11 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
         return false;
     }
 
-    // State machine: System initialization
-    state_machine_->injectSystemInit();
+    // =================================================================
+    // STEP 1: UPDATE STATE - "Who am I and what should I do?"
+    // =================================================================
 
-    // Point cloud Update
-    bool cone_updated = false;
-    // Perception
-    pcl::PointCloud<pcl::PointXYZ>::Ptr lidar_point_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-    getLidarPointCloud(lidar_msg, lidar_point_cloud);
-
-    // Roi extraction
-    roi_extractor_->extractRoi(lidar_point_cloud, roi_point_cloud_);
-
-    // Ground removal
-    ground_removal_->removeGround(roi_point_cloud_, ground_point_cloud_, non_ground_point_cloud_);
-
-    // Clustering
-    clustering_->extractCones(non_ground_point_cloud_, cones_);
-
-    // Color detection
-    projected_cones_image_ = color_detection_->ConesColor(cones_, camera1_msg, camera2_msg);
-
-    // Localization
+    // Update current vehicle state with IMU and GPS data
     Eigen::Vector3d acc;    
     Eigen::Vector3d gyro;
     Eigen::Quaterniond orientation;
@@ -1681,25 +1691,72 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     localization_->updateImu(Eigen::Vector3d(acc.x(), acc.y(), gyro.z()), orientation, imu_msg.header.stamp.toSec());
     localization_->updateGps(Eigen::Vector2d(gps_msg.latitude, gps_msg.longitude), gps_msg.header.stamp.toSec());
 
-    // Go signal Update
-    // State machine: Go signal
+    auto current_pose = localization_->getCurrentPose(); 
+    auto current_velocity = localization_->getCurrentVelocity();
+    VehicleState vehicle_state(current_pose.x(), current_pose.y(), current_pose.z(), current_velocity);
+
+    // Update state machine with go signal
+    state_machine_->injectSystemInit();
     if(go_signal_msg.mission != "None" && go_signal_msg.mission != ""){
         state_machine_->injectGoSignal(go_signal_msg.mission, go_signal_msg.track);
     }
 
-    // Planning
+    // Get current planning state
     planning_state_ = state_machine_->getCurrentState();
-    auto current_pose = localization_->getCurrentPose(); 
-    auto current_vel = localization_->getCurrentVelocity();
-    VehicleState vehicle_state(current_pose.x(), current_pose.y(), current_pose.z(), current_vel);
 
-    // Mapping
-    std::vector<Cone> cones_for_planning = map_manager_->updateAndGetPlannedCones(vehicle_state, cones_);
+    // Update autonomous mode message
+    std::string autonomous_mode = state_machine_->getCurrentStateString();
+    autonomous_mode_msg.data = autonomous_mode;
 
-    // Local planning
-    trajectory_points_ = trajectory_generator_->generateTrajectory(cones_for_planning, planning_state_);
+    // =================================================================
+    // STEP 2: CHECK DRIVING CONDITIONS - "Can I drive?"
+    // =================================================================
+
+    if (planning_state_ != ASState::AS_DRIVING) {
+        control_command_msg.steering = 0.0;
+        control_command_msg.throttle = 0.0;
+        control_command_msg.brake = 1.0;
+        return true;
+    }
+
+    // =================================================================
+    // STEP 3: PERCEPTION - ""What is around me?"
+    // =================================================================
+
+    // Point cloud Update
+    bool cone_updated = false;
+
+    // Convert LiDAR point cloud from ROS message to PCL point cloud
+    pcl::PointCloud<pcl::PointXYZ>::Ptr lidar_point_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    getLidarPointCloud(lidar_msg, lidar_point_cloud);
+
+    // Extract ROI from point cloud
+    roi_extractor_->extractRoi(lidar_point_cloud, roi_point_cloud_);
+
+    // Remove ground points from point cloud
+    ground_removal_->removeGround(roi_point_cloud_, ground_point_cloud_, non_ground_point_cloud_);
+
+    // Cluster the remaining points to detect cones
+    clustering_->extractCones(non_ground_point_cloud_, cones_);
+
+    // Detect cone colors using camera images
+    projected_cones_image_ = color_detection_->ConesColor(cones_, camera1_msg, camera2_msg);
     
-    // Control
+    // =================================================================
+    // STEP 4: MAPPING & PLANNING - "Which way to go?"
+    // =================================================================
+
+    // Update global cone map
+    std::vector<Cone> cones_for_planning = map_manager_->updateAndGetPlannedCones(vehicle_state, cones_);
+    trajectory_points_ = trajectory_generator_->generateTrajectory(cones_for_planning, planning_state_);
+
+    // Behavior planning
+    // setRacingStrategy(vehicle_state, cones_for_planning);
+
+    // =================================================================
+    // STEP 5: CONTROL - "How do I get there?"
+    // =================================================================
+    
     // 1. 횡방향 제어: 경로와 현재 상태를 기반으로 조향각 계산
     double steering_angle = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_);
 
@@ -1717,10 +1774,6 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
         control_command_msg.brake = -throttle;
     }
 
-    // State machine: Autonomous mode
-    std::string autonomous_mode = state_machine_->getCurrentStateString();
-    autonomous_mode_msg.data = autonomous_mode;
-    
     // Debug
     static int count = 0;
     count++;
@@ -1738,6 +1791,8 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
 
     return true;
 }
+
+// =================== Getters ====================
 
 void FormulaAutonomousSystem::getLidarPointCloud(sensor_msgs::PointCloud2& msg, pcl::PointCloud<pcl::PointXYZ>::Ptr& point_cloud){
     // Convert ROS PointCloud2 message to PCL point cloud
@@ -1782,3 +1837,46 @@ void FormulaAutonomousSystem::getImuData(sensor_msgs::Imu& msg, Eigen::Vector3d&
     gyro.z() = msg.angular_velocity.z;
     return;
 }
+
+std::vector<Cone> FormulaAutonomousSystem::getGlobalConeMap() const {
+    if (map_manager_) {
+        return map_manager_->getGlobalConeMap();
+    }
+    return {}; // Return empty vector if map_manager_ is not initialized
+}
+
+/*void FormulaAutonomousSystem::setRacingStrategy(const VehicleState& vehicle_state, const std::vector<Cone>& cones_for_planning) {
+    // 1. Lap Counting & Mode Switching Logic
+    if (!is_start_finish_line_defined_) {
+        defineStartFinishLine(cones_for_planning);
+    }
+    if (is_start_finish_line_defined_) {
+        updateLapCount(vehicle_state); // current_lap_ is updated inside
+    }
+    // 2. Trajectory Planning based on Driving Mode
+    if (current_mode_ == DrivingMode::MAPPING) {
+        // In mapping mode, we do not generate a global path
+        trajectory_points_ = trajectory_generator_->generateTrajectory(cones_for_planning, planning_state_);
+
+        // Switch to RACING mode after completing the first lap
+        if (current_lap_ > 1 && !is_global_path_generated_) {
+            ROS_INFO("Lap 1 finished. Generating Global Path and switching to RACING mode...");
+            generateGlobalPath();
+            is_global_path_generated_ = true;
+            current_mode_ = DrivingMode::RACING;
+            ROS_INFO("Switched to RACING mode!");
+        }
+
+    } else {
+        // In racing mode, follow the global path
+        if (!global_path_.empty()) {
+            // TODO: (다음 단계에서 구현) 전역 경로에서 현재 주행에 필요한 부분을 추출
+            // trajectory_points_ = trajectory_generator_->getTrajectoryFromGlobalPath(vehicle_state, global_path_);
+            trajectory_points_ = trajectory_generator_->generateTrajectory(cones_for_planning, planning_state_); // 임시
+        } else {
+            ROS_WARN("RACING mode is active, but global path is not ready. Using local planner as fallback.");
+            trajectory_points_ = trajectory_generator_->generateTrajectory(cones_for_planning, planning_state_);
+        }
+    }
+}
+*/
