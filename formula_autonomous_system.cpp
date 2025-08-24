@@ -1,3 +1,4 @@
+
 /**
  * @file formula_autonomous_system.cpp
  * @author Jiwon Seok (jiwonseok@hanyang.ac.kr)
@@ -25,7 +26,7 @@ void RoiExtractor::extractRoi(const pcl::PointCloud<pcl::PointXYZ>::Ptr& input_c
     roi_cloud->header = input_cloud->header;
 
     for (const auto& point : input_cloud->points) {
-
+        
         // Check if point is within ROI
         if (point.x > params_->lidar_roi_x_min_ && point.x < params_->lidar_roi_x_max_ &&
             point.y > params_->lidar_roi_y_min_ && point.y < params_->lidar_roi_y_max_ &&
@@ -169,6 +170,7 @@ Clustering::Clustering(const std::shared_ptr<PerceptionParams> params)
         0,    0,                0,                1;
     
     std::cout << "Vehicle-to-Lidar transformation matrix:" << std::endl << vehicle_to_lidar_transform_ << std::endl;
+
 }
 
 Clustering::Clustering(double eps, int min_points, double min_cone_height, double max_cone_height) {
@@ -197,10 +199,10 @@ bool Clustering::extractCones(const pcl::PointCloud<pcl::PointXYZ>::Ptr& input_p
             
             // Convert centroid to vehicle base frame
             Eigen::Vector4f centroid_4d(centroid.x(), centroid.y(), centroid.z(), 1.0f);
-            Eigen::Vector4f centroid_lidar = vehicle_to_lidar_transform_ * centroid_4d;
+            Eigen::Vector4f centroid_vehicle = vehicle_to_lidar_transform_ * centroid_4d;
             
             // Assign centroid to cone
-            cone.center = pcl::PointXYZ(centroid_lidar.x(), centroid_lidar.y(), centroid_lidar.z());
+            cone.center = pcl::PointXYZ(centroid_vehicle.x(), centroid_vehicle.y(), centroid_vehicle.z());
             cone.color = "unknown"; // Initial color is unknown
             cone.confidence = std::min(1.0f, static_cast<float>(cluster.size()) / 50.0f);
             
@@ -422,6 +424,33 @@ cv::Mat ColorDetection::createTransformationMatrix(double x, double y, double z,
         0,    0,                0,                1);
     
     return T;
+}
+
+void ColorDetection::getCameraImage(sensor_msgs::Image& msg, cv::Mat& image){
+    // Convert ROS Image message to OpenCV Mat
+    cv_bridge::CvImagePtr cv_ptr;
+    try {
+        // Convert ROS message to cv_bridge format
+        cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+        // Extract OpenCV Mat from cv_bridge
+        image = cv_ptr->image.clone();
+        
+        // Check if image is valid
+        if (image.empty()) {
+            ROS_WARN("Received empty camera image");
+            return;
+        }
+        
+        // Optional: Log image dimensions for debugging
+        ROS_DEBUG("Camera image received: %dx%d, channels: %d", 
+                  image.cols, image.rows, image.channels());
+    }
+    catch (cv_bridge::Exception& e) {
+        ROS_ERROR("cv_bridge exception while converting camera image: %s", e.what());
+        // Initialize empty image on error
+        image = cv::Mat();
+    }
+    return;
 }
 
 std::string ColorDetection::detectConeColor(const Cone& cone, const cv::Mat& rgb_image, const cv::Point2f& projection_point) {
@@ -728,6 +757,45 @@ cv::Rect ColorDetection::getSafeWindow(const cv::Point2f& center, int window_siz
     return cv::Rect(x, y, width, height);
 } 
 
+cv::Mat ColorDetection::ConesColor(std::vector<Cone>& cones, sensor_msgs::Image& camera1_msg, sensor_msgs::Image& camera2_msg) {
+    cv::Mat camera1_image, camera2_image;
+    getCameraImage(camera1_msg, camera1_image);
+    getCameraImage(camera2_msg, camera2_image);
+
+    if (!camera1_image.empty() && !camera2_image.empty()) {
+        cones = classifyConesColor(cones, camera1_image, camera2_image);
+    }
+
+    // for debugging: visualize cones
+    cv::Mat debug_img1 = visualizeProjection(cones, camera1_image);
+    cv::Mat debug_img2 = visualizeProjection(cones, camera2_image);
+    cv::Mat combined_debug_image;
+
+    // Check if debug images are empty
+    if (!debug_img1.empty() && !debug_img2.empty()) {
+        // Resize debug images to match height
+        if (debug_img1.rows != debug_img2.rows) {
+            // Calculate the ratio and resize debug_img2 to match debug_img1 height
+            double ratio = (double)debug_img1.rows / (double)debug_img2.rows;
+            int new_width = (int)((double)debug_img2.cols * ratio);
+        
+            //  Resize debug_img2 to match debug_img1 height
+            cv::resize(debug_img2, debug_img2, cv::Size(new_width, debug_img1.rows));
+        }
+
+        cv::hconcat(debug_img1, debug_img2, combined_debug_image);
+        
+    // show one of the debug images if the other is empty
+    } else if (!debug_img1.empty()) {
+        combined_debug_image = debug_img1;
+    } else if (!debug_img2.empty()) {
+        combined_debug_image = debug_img2;
+    }
+    
+    return combined_debug_image;
+}
+
+
 // ==================== Localization ====================
 
 Localization::Localization(const std::shared_ptr<LocalizationParams>& params)
@@ -799,16 +867,29 @@ void Localization::updateGps(const Eigen::Vector2d& gps_wgs84, double curr_time_
     state_[0] = gps_enu[0]; // x
     state_[1] = gps_enu[1]; // y
 
-    // Update velocity
+    // Update velocity with complementary filter(GPS + IMU)
     double dt_gps = curr_time_sec - prev_gps_time_sec_;
     if (dt_gps > 0.0 && curr_time_sec > std::numeric_limits<double>::epsilon()) {
         double dx = state_[0] - prev_gps_enu_[0];
         double dy = state_[1] - prev_gps_enu_[1];
         prev_gps_enu_ << state_[0], state_[1];
-        double vx = dx / dt_gps;
-        double vy = dy / dt_gps;
-        state_[3] = params_->alpha_velocity_ * state_[3] + (1-params_->alpha_velocity_) * (vx * cos(-state_[2]) - vy * sin(-state_[2])); // longitudinal velocity
-        state_[4] = params_->alpha_velocity_ * state_[4] + (1-params_->alpha_velocity_) * (vx * sin(-state_[2]) + vy * cos(-state_[2])); // lateral velocity
+
+        // Calculate velocity in ENU frame
+        double vx_enu = dx / dt_gps;
+        double vy_enu = dy / dt_gps;
+
+        // Transform velocity to vehicle frame
+        double vx_vehicle =  vx_enu * cos(-state_[2]) - vy_enu * sin(-state_[2]);
+        double vy_vehicle =  vx_enu * sin(-state_[2]) + vy_enu * cos(-state_[2]);
+
+        // Recall IMU velocity
+        double predicted_vx = state_[3];
+        double predicted_vy = state_[4];
+
+        // Apply complementary filter to fuse GPS and IMU velocities
+        state_[3] = (1.0 - params_->gps_correction_gain_) * predicted_vx + params_->gps_correction_gain_ * vx_vehicle; // longitudinal velocity
+        state_[4] = (1.0 - params_->gps_correction_gain_) * predicted_vy + params_->gps_correction_gain_ * vy_vehicle; // lateral velocity
+
         // Update previous GPS position
         prev_gps_enu_ << state_[0], state_[1];
     }
@@ -1035,124 +1116,154 @@ void StateMachine::logStateTransition(ASState from, ASState to, const std::strin
               << " (Reason: " << reason << ")" << std::endl;
 } 
 
-// ==================== Trajectory Generator ====================
+// ==================== Local Planning ====================
 
-// ==================== Trajectory Generator ====================
 
 TrajectoryGenerator::TrajectoryGenerator(const std::shared_ptr<TrajectoryParams>& params)
     : params_(params)
     , generated_trajectories_(0)
     , average_generation_time_(0.0)
     , last_generation_time_(0.0)
-    , max_history_size_(50) // 히스토리 최대 크기
 {
     std::cout << "TrajectoryGenerator: Initialized with lookahead " 
               << params_->lookahead_distance_ << "m, spacing " 
-              << params_->waypoint_spacing_ << "m" << std::endl; 
+              << params_->waypoint_spacing_ << "m" << std::endl;
 }
 
-// -------------------- Trajectory Generation --------------------
-std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(
-        const std::vector<Cone>& cones, ASState planning_state)
-{
-    if(planning_state == ASState::AS_DRIVING){
-        return generateConesTrajectory(cones);
-    } else {
-        return generateStopTrajectory();
-    }
-}
-
-// -------------------- Cones Trajectory --------------------
-std::vector<TrajectoryPoint> TrajectoryGenerator::generateConesTrajectory(
-        const std::vector<Cone>& cones)
+std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(const std::vector<Cone>& cones, ASState planning_state, bool is_map_complete)
 {
     last_trajectory_.clear();
+
+    if (planning_state != ASState::AS_DRIVING) {
+        return generateStopTrajectory();
+    }
     
-    // 1. 로컬 좌표계에서 좌/우 콘 분류
     std::vector<Eigen::Vector2d> blue_cones_local, yellow_cones_local;
+
+    // Filter cones based on color and position
     for (const auto& cone : cones) {
-        Eigen::Vector2d pos(cone.center.x, cone.center.y);
-        if (pos.x() > 0.0) {
-            if (cone.color == "blue") blue_cones_local.push_back(pos);
-            else if (cone.color == "yellow") yellow_cones_local.push_back(pos);
+        if (cone.center.x > 0.0) { // Only consider cones in front of the vehicle
+            if (cone.color == "blue") {
+                blue_cones_local.push_back(Eigen::Vector2d(cone.center.x, cone.center.y));
+            } else if (cone.color == "yellow") {
+                yellow_cones_local.push_back(Eigen::Vector2d(cone.center.x, cone.center.y));
+            }
         }
     }
-
-    // 1-1. 이전 데이터 누적
-    for (auto& p : blue_cones_local) blue_cones_history_.push_back(p);
-    while (blue_cones_history_.size() > max_history_size_) blue_cones_history_.pop_front();
-
-    for (auto& p : yellow_cones_local) yellow_cones_history_.push_back(p);
-    while (yellow_cones_history_.size() > max_history_size_) yellow_cones_history_.pop_front();
-
-    // 히스토리 포함
-    std::vector<Eigen::Vector2d> blue_cones_combined(blue_cones_history_.begin(), blue_cones_history_.end());
-    std::vector<Eigen::Vector2d> yellow_cones_combined(yellow_cones_history_.begin(), yellow_cones_history_.end());
-
-    // 2. 콘이 없으면 직선 fallback
-    if (blue_cones_combined.empty() && yellow_cones_combined.empty()) {
-        int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_) + 1;
-        for (int i = 0; i < num_points; ++i) {
+    
+    // If no cones are detected, generate a default trajectory
+    if (blue_cones_local.empty() && yellow_cones_local.empty()) {
+        int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_);
+        for (int i = 0; i <= num_points; ++i) {
             double x = i * params_->waypoint_spacing_;
             last_trajectory_.emplace_back(x, 0.0, 0.0, 0.0, params_->default_speed_, x);
         }
         return last_trajectory_;
     }
-
-    // === NEW ===
-    // 3. 좌/우 콘 다항식 피팅 (2차)
-    Eigen::VectorXd left_coeffs = polyfitCones(yellow_cones_combined, 2);  // 노란=좌측
-    Eigen::VectorXd right_coeffs = polyfitCones(blue_cones_combined, 2);   // 파란=우측
-
-    // === NEW ===
-    // 4. 중앙 경로 생성
+    
     std::vector<Eigen::Vector2d> path_points;
-    int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_);
+
+    // Start with the vehicle's current position
     path_points.push_back(Eigen::Vector2d(0.0, 0.0));
 
+    int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_);
     for (int i = 1; i <= num_points; ++i) {
-        double x = i * params_->waypoint_spacing_;
-        double y_left = evaluatePoly(left_coeffs, x);
-        double y_right = evaluatePoly(right_coeffs, x);
-        double y_center = (y_left + y_right) / 2.0;
-        path_points.push_back(Eigen::Vector2d(x, y_center));
+        double target_x = i * params_->waypoint_spacing_;
+        
+        Eigen::Vector2d* closest_blue = nullptr;
+        Eigen::Vector2d* closest_yellow = nullptr;
+        double min_blue_dist = 1.5, min_yellow_dist = 1.5;
+        
+        // Find the closest blue and yellow cones to the target x position
+        for (auto& cone_pos : blue_cones_local) {
+            double dist = std::abs(cone_pos.x() - target_x);
+            if (dist < min_blue_dist) {
+                min_blue_dist = dist;
+                closest_blue = &cone_pos;
+            }
+        }
+        for (auto& cone_pos : yellow_cones_local) {
+            double dist = std::abs(cone_pos.x() - target_x);
+            if (dist < min_yellow_dist) {
+                min_yellow_dist = dist;
+                closest_yellow = &cone_pos;
+            }
+        }
+        
+        Eigen::Vector2d waypoint(target_x, 0.0);
+
+        // Calculate the y position based on the closest cones
+        if (closest_blue && closest_yellow) {
+            waypoint.y() = (closest_blue->y() + closest_yellow->y()) * 0.5;
+
+        } else if (closest_blue) {
+            waypoint.y() = closest_blue->y() - params_->lane_offset_;
+
+        } else if (closest_yellow) {
+            waypoint.y() = closest_yellow->y() + params_->lane_offset_;
+
+        } else if (!path_points.empty()) {
+            waypoint.y() = path_points.back().y();
+        }
+        path_points.push_back(waypoint);
     }
+    
+    // Generate trajectory points from the path
+    if (path_points.size() >= 2) {
 
-    // 5. 궤적점 생성 + yaw + curvature + 속도
-    for (size_t i = 0; i < path_points.size(); ++i) {
-        double yaw = 0.0;
-        double curvature = 0.0;
+        std::vector<double> x_pts, y_pts;
 
-        if (i < path_points.size() - 1) {
-            Eigen::Vector2d dir = path_points[i + 1] - path_points[i];
-            yaw = atan2(dir.y(), dir.x());
-        } else if (i > 0) {
-            Eigen::Vector2d dir = path_points[i] - path_points[i - 1];
-            yaw = atan2(dir.y(), dir.x());
+        for (const auto& pt : path_points) {
+            x_pts.push_back(pt.x());
+            y_pts.push_back(pt.y());
+        }
+        
+        for (size_t i = 1; i < x_pts.size(); ++i) {
+            if (x_pts[i] <= x_pts[i-1]) {
+                x_pts[i] = x_pts[i-1] + 0.01;
+            }
         }
 
-        // 곡률 계산
-        if (i > 0 && i < path_points.size() - 1) {
-            curvature = calculateCurvature(path_points[i - 1], path_points[i], path_points[i + 1]);
+        tk::spline s;
+        s.set_points(x_pts, y_pts);
+
+        for (double current_dist = 0; current_dist < params_->lookahead_distance_; current_dist += 0.5) {
+            double x = current_dist;
+            double y = s(x);
+            double x_next = x + 0.01;
+            double y_next = s(x_next);
+            double yaw = std::atan2(y_next - y, x_next - x);
+            double curvature = calculateCurvature(s, x);
+
+            // 맵 완성 여부에 따라 다른 속도 프로파일 적용
+            double current_max_speed = is_map_complete ? params_->racing_max_speed_ : params_->max_speed_;
+            double current_min_speed = is_map_complete ? params_->racing_min_speed_ : params_->min_speed_;
+
+            // Adjust speed based on curvature
+            double desired_speed = current_max_speed / (1.0 + params_->curvature_gain_ * std::abs(curvature));
+
+            // Clamp speed to min and max limits
+            double target_speed = std::max(current_min_speed, std::min(desired_speed, current_max_speed));
+
+            // Add trajectory point
+            last_trajectory_.emplace_back(x, y, yaw, curvature, target_speed, current_dist);
         }
-
-        // 곡률 기반 속도 제어
-        double speed = params_->max_speed_ / (1.0 + params_->curvature_factor * std::abs(curvature));
-        speed = std::clamp(speed, params_->min_speed_, params_->max_speed_);
-
-        last_trajectory_.emplace_back(
-            path_points[i].x(), path_points[i].y(),
-            yaw, curvature, speed, path_points[i].x()
-        );
     }
-
+    
     return last_trajectory_;
 }
 
-// -------------------- Stop Trajectory --------------------
+// Calculate curvature using the second derivative of the spline
+double TrajectoryGenerator::calculateCurvature(const tk::spline& s, double x) {
+    double dx = s.deriv(1, x);  // first derivative (y')
+    double ddx = s.deriv(2, x); // second derivative (y'')
+    return std::abs(ddx) / std::pow(1 + dx * dx, 1.5);
+}
+
 std::vector<TrajectoryPoint> TrajectoryGenerator::generateStopTrajectory()
 {
     last_trajectory_.clear();
+    // 전방 지점들에 대해 중앙점 계산
     int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_);
     for (int i = 0; i < num_points; ++i) {
         double x = i * params_->waypoint_spacing_;
@@ -1161,7 +1272,7 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateStopTrajectory()
     return last_trajectory_;
 }
 
-// -------------------- Utility --------------------
+// Utility functions
 double TrajectoryGenerator::calculateDistance(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2) const
 {
     return (p1 - p2).norm();
@@ -1173,48 +1284,6 @@ double TrajectoryGenerator::calculateAngle(const Eigen::Vector2d& p1, const Eige
     return std::atan2(diff.y(), diff.x());
 }
 
-// === NEW ===
-double TrajectoryGenerator::calculateCurvature(
-        const Eigen::Vector2d& p1, const Eigen::Vector2d& p2, const Eigen::Vector2d& p3) const
-{
-    double k1 = (p2.y() - p1.y()) / (p2.x() - p1.x() + 1e-6);
-    double k2 = (p3.y() - p2.y()) / (p3.x() - p2.x() + 1e-6);
-    double curvature = std::abs(k2 - k1) / (p3.x() - p1.x() + 1e-6); // 단순 근사
-    return curvature;
-}
-
-// === NEW ===
-Eigen::VectorXd TrajectoryGenerator::polyfitCones(
-        const std::vector<Eigen::Vector2d>& cones, int degree)
-{
-    if (cones.empty()) return Eigen::VectorXd::Zero(degree + 1);
-
-    Eigen::VectorXd x(cones.size()), y(cones.size());
-    for (size_t i = 0; i < cones.size(); ++i) {
-        x(i) = cones[i].x();
-        y(i) = cones[i].y();
-    }
-
-    Eigen::MatrixXd A(cones.size(), degree + 1);
-    for (size_t i = 0; i < cones.size(); ++i)
-        for (int j = 0; j <= degree; ++j)
-            A(i, j) = std::pow(x(i), j);
-
-    Eigen::VectorXd coeffs = A.colPivHouseholderQr().solve(y);
-    return coeffs;
-}
-
-// === NEW ===
-double TrajectoryGenerator::evaluatePoly(const Eigen::VectorXd& coeffs, double x)
-{
-    double y = 0.0;
-    for (int i = 0; i < coeffs.size(); ++i)
-        y += coeffs[i] * std::pow(x, i);
-    return y;
-}
-
-// -------------------- Trajectory Stats --------------------
-void TrajectoryGenerator::printTrajectoryStats() const
 void TrajectoryGenerator::printTrajectoryStats() const
 {
     std::cout << "=== Trajectory Generator Statistics ===" << std::endl;
@@ -1238,8 +1307,207 @@ void TrajectoryGenerator::printTrajectoryStats() const
         std::cout << "Maximum curvature: " << max_curvature << " (1/m)" << std::endl;
     }
     std::cout << "=====================================" << std::endl;
+} 
+
+// ==================== Mapping ====================
+MapManager::MapManager(const std::shared_ptr<TrajectoryParams>& params) : params_(params) {}
+
+// 저장된 콘 데이터를 안전하게 복사하여 반환하는 함수 (콘 시각화 관련)
+std::vector<Cone> MapManager::getStoredCones() {
+    std::lock_guard<std::mutex> lock(cone_memory_mutex_);
+    return cone_memory_; // Return a copy of the stored cones
 }
 
+// ==================== [추가될 코드 시작] ==================== (차선생성 관련)
+
+// 외부에서 차선 데이터를 요청할 때 호출되는 함수
+std::pair<std::vector<Eigen::Vector2d>, std::vector<Eigen::Vector2d>> MapManager::getTrackLanes() {
+    std::lock_guard<std::mutex> lock(cone_memory_mutex_);
+    // cone_memory_에 변화가 있을 때만 차선을 다시 생성 (효율성 증대)
+    // 참고: 현재는 매번 호출 시 생성하지만, 추후 cone_memory_의 크기 변화를 감지하여 최적화할 수 있습니다.
+    generateLanesFromMemory();
+    return {left_lane_points_, right_lane_points_};
+}
+
+// 근접 이웃 정렬 알고리즘
+std::vector<Eigen::Vector2d> MapManager::sortConesByProximity(const std::vector<Eigen::Vector2d>& cones) {
+    if (cones.size() < 2) {
+        return cones;
+    }
+
+    std::vector<Eigen::Vector2d> unsorted_cones = cones;
+    std::vector<Eigen::Vector2d> sorted_cones;
+
+    // 가장 작은 x값을 가진 콘을 시작점으로 가정
+    auto start_it = std::min_element(unsorted_cones.begin(), unsorted_cones.end(),
+        [](const Eigen::Vector2d& a, const Eigen::Vector2d& b) {
+            return a.x() < b.x();
+        });
+
+    sorted_cones.push_back(*start_it);
+    unsorted_cones.erase(start_it);
+
+    // 가장 가까운 콘을 순차적으로 찾아 정렬된 리스트에 추가
+    while (!unsorted_cones.empty()) {
+        Eigen::Vector2d current_cone = sorted_cones.back();
+        double min_dist_sq = std::numeric_limits<double>::max();
+        auto closest_it = unsorted_cones.begin();
+
+        for (auto it = unsorted_cones.begin(); it != unsorted_cones.end(); ++it) {
+            double dist_sq = (it->x() - current_cone.x()) * (it->x() - current_cone.x()) +
+                             (it->y() - current_cone.y()) * (it->y() - current_cone.y());
+            if (dist_sq < min_dist_sq) {
+                min_dist_sq = dist_sq;
+                closest_it = it;
+            }
+        }
+        sorted_cones.push_back(*closest_it);
+        unsorted_cones.erase(closest_it);
+    }
+
+    return sorted_cones;
+}
+
+// 파라메트릭 스플라인을 이용한 차선 생성 함수
+void MapManager::generateLanesFromMemory() {
+    std::vector<Eigen::Vector2d> blue_cones, yellow_cones;
+    for (const auto& cone : cone_memory_) {
+        if (cone.color == "blue") {
+            blue_cones.emplace_back(cone.center.x, cone.center.y);
+        } else if (cone.color == "yellow") {
+            yellow_cones.emplace_back(cone.center.x, cone.center.y);
+        }
+    }
+
+    // 근접 이웃 방식으로 콘 정렬
+    std::vector<Eigen::Vector2d> sorted_blue = sortConesByProximity(blue_cones);
+    std::vector<Eigen::Vector2d> sorted_yellow = sortConesByProximity(yellow_cones);
+
+    left_lane_points_.clear();
+    right_lane_points_.clear();
+
+    // 왼쪽 차선 (파란색) 생성
+    if (sorted_blue.size() > 2) {
+        std::vector<double> s_pts, x_pts, y_pts;
+        s_pts.push_back(0.0);
+        x_pts.push_back(sorted_blue[0].x());
+        y_pts.push_back(sorted_blue[0].y());
+
+        // 트랙을 따라 이동한 누적 거리(s) 계산
+        for (size_t i = 1; i < sorted_blue.size(); ++i) {
+            double dist = std::hypot(sorted_blue[i].x() - sorted_blue[i-1].x(), sorted_blue[i].y() - sorted_blue[i-1].y());
+            s_pts.push_back(s_pts.back() + dist);
+            x_pts.push_back(sorted_blue[i].x());
+            y_pts.push_back(sorted_blue[i].y());
+        }
+
+        tk::spline spline_x, spline_y;
+        spline_x.set_points(s_pts, x_pts); // s에 대한 x의 스플라인
+        spline_y.set_points(s_pts, y_pts); // s에 대한 y의 스플라인
+
+        // 0.5m 간격으로 스플라인을 다시 샘플링하여 부드러운 차선 포인트 생성
+        double total_length = s_pts.back();
+        for (double s = 0; s < total_length; s += 0.5) {
+            left_lane_points_.emplace_back(spline_x(s), spline_y(s));
+        }
+        left_lane_points_.emplace_back(sorted_blue.back().x(), sorted_blue.back().y()); // 마지막 점 추가 보장
+    }
+
+    // 오른쪽 차선 (노란색) 생성 (왼쪽과 동일한 로직)
+    if (sorted_yellow.size() > 2) {
+        std::vector<double> s_pts, x_pts, y_pts;
+        s_pts.push_back(0.0);
+        x_pts.push_back(sorted_yellow[0].x());
+        y_pts.push_back(sorted_yellow[0].y());
+
+        for (size_t i = 1; i < sorted_yellow.size(); ++i) {
+            double dist = std::hypot(sorted_yellow[i].x() - sorted_yellow[i-1].x(), sorted_yellow[i].y() - sorted_yellow[i-1].y());
+            s_pts.push_back(s_pts.back() + dist);
+            x_pts.push_back(sorted_yellow[i].x());
+            y_pts.push_back(sorted_yellow[i].y());
+        }
+
+        tk::spline spline_x, spline_y;
+        spline_x.set_points(s_pts, x_pts);
+        spline_y.set_points(s_pts, y_pts);
+
+        double total_length = s_pts.back();
+        for (double s = 0; s < total_length; s += 0.5) {
+            right_lane_points_.emplace_back(spline_x(s), spline_y(s));
+        }
+        right_lane_points_.emplace_back(sorted_yellow.back().x(), sorted_yellow.back().y());
+    }
+
+    lanes_generated_ = true;
+}
+// ==================== [추가될 코드 끝] ====================
+
+std::vector<Cone> MapManager::updateAndGetPlannedCones(const VehicleState& current_state, const std::vector<Cone>& real_time_cones) {
+    {
+        // mutex lock to protect cone memory
+        std::lock_guard<std::mutex> lock(cone_memory_mutex_);
+        
+        // Current vehicle position and orientation (global frame)
+        double vehicle_x = current_state.position.x();
+        double vehicle_y = current_state.position.y();
+        double vehicle_yaw = current_state.yaw;
+
+        for (const auto& local_cone : real_time_cones) {
+            Cone global_cone = local_cone;
+            global_cone.center.x = vehicle_x + local_cone.center.x * std::cos(vehicle_yaw) - local_cone.center.y * std::sin(vehicle_yaw);
+            global_cone.center.y = vehicle_y + local_cone.center.x * std::sin(vehicle_yaw) + local_cone.center.y * std::cos(vehicle_yaw);
+
+            bool found_in_memory = false;
+
+            for (auto& mem_cone : cone_memory_) {
+                double dist = std::hypot(global_cone.center.x - mem_cone.center.x, global_cone.center.y - mem_cone.center.y);
+
+                if (dist < params_->cone_memory_association_threshold_) { // Flag to check if cone is already in memory
+                    mem_cone.center.x = (mem_cone.center.x * 0.9) + (global_cone.center.x * 0.1);
+                    mem_cone.center.y = (mem_cone.center.y * 0.9) + (global_cone.center.y * 0.1);
+                    found_in_memory = true;
+                    break;
+                }
+            }
+
+            // Update cone memory only if not found
+            if (!found_in_memory) {
+                cone_memory_.push_back(global_cone);
+            }
+        }
+    }
+
+    //
+    std::vector<Cone> cones_for_planning = real_time_cones;
+    {
+        // mutex lock to protect cone memory
+        std::lock_guard<std::mutex> lock(cone_memory_mutex_);
+
+        // Vehicle position and orientation (global frame)
+        double vehicle_x = current_state.position.x();
+        double vehicle_y = current_state.position.y();
+        double vehicle_yaw = current_state.yaw;
+
+        for (const auto& global_cone : cone_memory_) {
+            double dist_to_car = std::hypot(global_cone.center.x - vehicle_x, global_cone.center.y - vehicle_y);
+
+            // Check if the cone is within the search radius and in front of the vehicle
+            if (dist_to_car < params_->cone_memory_search_radius_) {
+                Cone local_cone = global_cone;
+                double dx = global_cone.center.x - vehicle_x;
+                double dy = global_cone.center.y - vehicle_y;
+                local_cone.center.x = dx * std::cos(-vehicle_yaw) - dy * std::sin(-vehicle_yaw);
+                local_cone.center.y = dx * std::sin(-vehicle_yaw) + dy * std::cos(-vehicle_yaw);
+                
+                // Only consider cones in front of the vehicle
+                if (local_cone.center.x > 0) {
+                    cones_for_planning.push_back(local_cone);
+                }
+            }
+        }
+    }
+    return cones_for_planning;
+}
 
 // ==================== Control ====================
 
@@ -1404,8 +1672,14 @@ FormulaAutonomousSystem::FormulaAutonomousSystem():
     localization_(nullptr),
     state_machine_(nullptr),
     lateral_controller_(nullptr),
-    longitudinal_controller_(nullptr) {
+    longitudinal_controller_(nullptr),
+    lap_counter_(0),
+    is_map_complete_(false),
+    last_pos_relative_to_start_line_(0),
+    has_crossed_start_line_once_(false)
+{
 }
+
 
 FormulaAutonomousSystem::~FormulaAutonomousSystem(){
     ROS_INFO("FormulaAutonomousSystem: Destructor called");
@@ -1413,7 +1687,7 @@ FormulaAutonomousSystem::~FormulaAutonomousSystem(){
 }
 
 // init 함수는 ros node 초기화시 시행되므로 작성 필요.
-bool FormulaAutonomousSystem::init(ros::NodeHandle& pnh){
+bool FormulaAutonomousSystem::init(ros::NodeHandle& pnh){ 
     pnh_ = pnh;
 
     // Get parameters
@@ -1451,6 +1725,9 @@ bool FormulaAutonomousSystem::init(ros::NodeHandle& pnh){
 
     // Local planning
     trajectory_generator_ = std::make_unique<TrajectoryGenerator>(local_planning_params_);
+
+    // Mapping
+    map_manager_ = std::make_unique<MapManager>(local_planning_params_);
 
     // Control
     if (control_params_->lateral_controller_type_ == "Stanley") { 
@@ -1535,42 +1812,7 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     clustering_->extractCones(non_ground_point_cloud_, cones_);
 
     // Color detection
-    cv::Mat camera1_image, camera2_image;
-    getCameraImage(camera1_msg, camera1_image);
-    getCameraImage(camera2_msg, camera2_image);
-
-    if (!camera1_image.empty() && !camera2_image.empty()) {
-        cones_ = color_detection_->classifyConesColor(cones_, camera1_image, camera2_image);
-    }
-    
-    // for debugging: visualize cones
-    cv::Mat debug_img1 = color_detection_->visualizeProjection(cones_, camera1_image);
-    cv::Mat debug_img2 = color_detection_->visualizeProjection(cones_, camera2_image);
-
-    // Check if debug images are empty
-    if (!debug_img1.empty() && !debug_img2.empty()) {
-        // Resize debug images to match height
-        if (debug_img1.rows != debug_img2.rows) {
-            // Calculate the ratio and resize debug_img2 to match debug_img1 height
-            double ratio = (double)debug_img1.rows / (double)debug_img2.rows;
-            int new_width = (int)((double)debug_img2.cols * ratio);
-        
-            //  Resize debug_img2 to match debug_img1 height
-            cv::resize(debug_img2, debug_img2, cv::Size(new_width, debug_img1.rows));
-        }
-
-        cv::Mat combined_debug_image;
-        cv::hconcat(debug_img1, debug_img2, combined_debug_image);
-        projected_cones_image_ = combined_debug_image;
-
-    } else {
-        // show one of the debug images if the other is empty
-        if (!debug_img1.empty()) {
-            projected_cones_image_ = debug_img1;
-        } else if (!debug_img2.empty()) {
-            projected_cones_image_ = debug_img2;
-        }
-    }
+    projected_cones_image_ = color_detection_->ConesColor(cones_, camera1_msg, camera2_msg);
 
     // Localization
     Eigen::Vector3d acc;    
@@ -1588,23 +1830,39 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
 
     // Planning
     planning_state_ = state_machine_->getCurrentState();
+    auto current_pose = localization_->getCurrentPose(); 
+    auto current_vel = localization_->getCurrentVelocity();
+    VehicleState vehicle_state(current_pose.x(), current_pose.y(), current_pose.z(), current_vel);
+     // 랩 완료 여부 확인
+    checkLapCompletion(vehicle_state);
 
-    // Local planning: Trajectory generator
-    trajectory_points_ = trajectory_generator_->generateTrajectory(cones_, planning_state_);
+    // Mapping
+    std::vector<Cone> cones_for_planning = map_manager_->updateAndGetPlannedCones(vehicle_state, cones_);
+
+    // Local planning
+    trajectory_points_ = trajectory_generator_->generateTrajectory(cones_for_planning, planning_state_, is_map_complete_);  // is_map_complete 인자 추가
     
     // Control
-    // 1. 측위 모듈로부터 현재 차량 상태를 가져옵니다.
-    auto current_pose = localization_->getCurrentPose(); // return type: Eigen::Vector3d(x, y, yaw)
-    auto current_vel = localization_->getCurrentVelocity(); // 이 함수가 속력(double)을 반환함
-    VehicleState vehicle_state(current_pose.x(), current_pose.y(), current_pose.z(), current_vel);
-
-    // 2. 횡방향 제어: 경로와 현재 상태를 기반으로 조향각 계산
+    // 1. 횡방향 제어: 경로와 현재 상태를 기반으로 조향각 계산
     double steering_angle = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_);
 
-    // 3. 종방향 제어: 목표 속도와 현재 속도를 기반으로 스로틀 계산
-    double throttle = longitudinal_controller_->calculate(trajectory_points_[0].speed, vehicle_state.speed);
+    // ==================== [수정될 코드 시작] ====================
+    // 2. 종방향 제어: 하이브리드 속도 계획
+    // 2-1. (기본 속도) 곡률 기반으로 계산된 경로의 목표 속도를 가져옴
+    double base_target_speed = trajectory_points_[0].speed;
 
-    // 4. 계산된 제어 명령을 멤버 변수에 저장
+    // 2-2. (실시간 보정) 계산된 스티어링 각도에 비례하여 목표 속도를 추가로 감속
+    double steering_dampening = std::abs(steering_angle) * control_params_->steering_based_speed_gain_;
+    double final_target_speed = base_target_speed - steering_dampening;
+
+    // 최종 목표 속도가 음수가 되지 않도록 최소 속도(예: 1.0 m/s)로 제한
+    final_target_speed = std::max(1.0, final_target_speed);
+
+    // 2-3. 최종 목표 속도를 바탕으로 PID 제어기를 통해 스로틀 계산
+    double throttle = longitudinal_controller_->calculate(final_target_speed, vehicle_state.speed);
+    // ==================== [수정될 코드 끝] ====================
+
+    // 3. 계산된 제어 명령을 멤버 변수에 저장
     control_command_msg.steering = -steering_angle; // FSDS 좌표계에 맞게 음수(-) 적용
     if (throttle > 0.0){
         control_command_msg.throttle = throttle;
@@ -1640,33 +1898,6 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
 void FormulaAutonomousSystem::getLidarPointCloud(sensor_msgs::PointCloud2& msg, pcl::PointCloud<pcl::PointXYZ>::Ptr& point_cloud){
     // Convert ROS PointCloud2 message to PCL point cloud
     pcl::fromROSMsg(msg, *point_cloud);
-    return;
-}
-
-void FormulaAutonomousSystem::getCameraImage(sensor_msgs::Image& msg, cv::Mat& image){
-    // Convert ROS Image message to OpenCV Mat
-    cv_bridge::CvImagePtr cv_ptr;
-    try {
-        // Convert ROS message to cv_bridge format
-        cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
-        // Extract OpenCV Mat from cv_bridge
-        image = cv_ptr->image.clone();
-        
-        // Check if image is valid
-        if (image.empty()) {
-            ROS_WARN("Received empty camera image");
-            return;
-        }
-        
-        // Optional: Log image dimensions for debugging
-        ROS_DEBUG("Camera image received: %dx%d, channels: %d", 
-                  image.cols, image.rows, image.channels());
-    }
-    catch (cv_bridge::Exception& e) {
-        ROS_ERROR("cv_bridge exception while converting camera image: %s", e.what());
-        // Initialize empty image on error
-        image = cv::Mat();
-    }
     return;
 }
 
@@ -1706,4 +1937,50 @@ void FormulaAutonomousSystem::getImuData(sensor_msgs::Imu& msg, Eigen::Vector3d&
     gyro.y() = msg.angular_velocity.y;
     gyro.z() = msg.angular_velocity.z;
     return;
+}
+
+//  lap counter
+void FormulaAutonomousSystem::checkLapCompletion(const VehicleState& current_state) {
+    auto stored_cones = map_manager_->getStoredCones();
+    std::vector<Cone> orange_cones;
+    for (const auto& cone : stored_cones) {
+        if (cone.color == "orange") {
+            orange_cones.push_back(cone);
+        }
+    }
+
+    if (orange_cones.size() < 2) return; // 출발선 미정의
+
+    Eigen::Vector2d start_p1(orange_cones[0].center.x, orange_cones[0].center.y);
+    Eigen::Vector2d start_p2(orange_cones[1].center.x, orange_cones[1].center.y);
+    Eigen::Vector2d line_vec = start_p2 - start_p1;
+    Eigen::Vector2d normal_vec(line_vec.y(), -line_vec.x());
+
+    Eigen::Vector2d car_vec = current_state.position - start_p1;
+    double dot_product = car_vec.dot(normal_vec);
+    int current_pos_relative = (dot_product > 0) ? 1 : -1;
+
+    if (last_pos_relative_to_start_line_ == 0) {
+        last_pos_relative_to_start_line_ = current_pos_relative;
+        return;
+    }
+
+    // 선을 뒤(-1)에서 앞(1)으로 통과하는 순간을 감지
+    if (last_pos_relative_to_start_line_ == -1 && current_pos_relative == 1) {
+        if (has_crossed_start_line_once_ == false) {
+            // [첫 통과]: '1랩 시작'으로 간주하고 상태만 변경
+            has_crossed_start_line_once_ = true;
+            ROS_INFO("Crossed start line. Lap 1 begins!");
+        } else {
+            // [두 번째 이후 통과]: '랩 완료'로 간주하고 카운터 증가
+            lap_counter_++;
+            ROS_INFO("Lap %d completed!", lap_counter_);
+            if (lap_counter_ >= 1 && !is_map_complete_) {
+                is_map_complete_ = true;
+                ROS_INFO("Map is complete. Switching to RACING MODE!");
+            }
+        }
+    }
+
+    last_pos_relative_to_start_line_ = current_pos_relative;
 }
