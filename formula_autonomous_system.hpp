@@ -988,12 +988,16 @@ std::vector<double> solve_cubic(double a, double b, double c, double d,
 #include <opencv2/imgproc.hpp>
 #include <cv_bridge/cv_bridge.h>
 
+// ================================================================
+// ======================= CORE DATA TYPES ========================
+// ================================================================
+
 // ==================== Constants ====================
 constexpr double DEG_TO_RAD = M_PI / 180.0;
 constexpr double RAD_TO_DEG = 180.0 / M_PI;
 constexpr double EARTH_RADIUS = 6378137.0; // WGS84 Earth radius in meters
 
-// ==================== Types ====================
+// ==================== Data Structures ====================
 struct Cone {
     pcl::PointXYZ center; // Cone center
     std::string color; // Cone color (yellow, blue, orange)
@@ -1019,6 +1023,19 @@ struct VehicleState {
     // initialize with default values
     VehicleState(double x = 0.0, double y = 0.0, double y_rad = 0.0, double spd = 0.0)
         : position(x, y), yaw(y_rad), speed(spd) {}
+};
+
+struct TrajectoryPoint {
+    Eigen::Vector2d position;   // x, y position
+    double yaw;                 // heading angle (radians)
+    double curvature;           // path curvature (1/radius)
+    double speed;               // target speed (m/s)
+    double s;                   // arc length from start
+    
+    // initialize with default values
+    TrajectoryPoint(double x = 0.0, double y = 0.0, double yaw_val = 0.0, 
+                   double curv = 0.0, double spd = 0.0, double s_val = 0.0)
+        : position(x, y), yaw(yaw_val), curvature(curv), speed(spd), s(s_val) {}
 };
 
 // Autonomous System States according to Formula Student rules
@@ -1047,7 +1064,15 @@ struct StateTransitionResult {
         : success(s), previous_state(prev), current_state(curr), message(msg) {}
 };
 
-// ==================== Parameters ====================
+// Behavior Planning
+enum class DrivingMode {
+    MAPPING,
+    RACING
+};
+
+// =================================================================
+// ==================== PARAMETER STRUCTS ==========================
+// =================================================================
 
 // Perception
 
@@ -1290,9 +1315,35 @@ struct LocalizationParams
     }
 };
 
+// ===================== Mapping =====================
+
+struct MappingParams {
+    // =================== Mapping Parameters ===================
+    double cone_memory_search_radius_;              // Search radius for associating new cones with memory (m)
+    double cone_memory_association_threshold_;      // Minimum association confidence to consider a match
+    
+    // Print parameters for debugging
+    void print() const {
+        printf("=== Mapping Parameters ===\n");
+        printf("Cone memory search radius: %.3f m\n", cone_memory_search_radius_);
+        printf("Cone memory association threshold: %.3f m\n", cone_memory_association_threshold_);
+    }
+    
+    // Load parameters from ROS NodeHandle
+    bool getParameters(ros::NodeHandle& pnh) {
+        std::cout << "FormulaAutonomousSystem: Mapping parameters file updated" << std::endl;
+        
+        // =================== Mapping Parameters ===================
+        if(!pnh.getParam("/mapping/cone_memory_search_radius", cone_memory_search_radius_)){std::cerr<<"Param mapping/cone_memory_search_radius has error" << std::endl; return false;}
+        if(!pnh.getParam("/mapping/cone_memory_association_threshold", cone_memory_association_threshold_)){std::cerr<<"Param mapping/cone_memory_association_threshold has error" << std::endl; return false;}
+        
+        return true;
+    }
+};
+
 // ==================== Planning ====================
 
-struct TrajectoryParams {
+struct PlanningParams {
     // =================== Basic Trajectory Generation ===================
     double lookahead_distance_;     // Lookahead distance (m)
     double waypoint_spacing_;       // Distance between waypoints (m)
@@ -1305,18 +1356,10 @@ struct TrajectoryParams {
     // =================== Safety Parameters ===================
     double safety_margin_;          // Safety margin from cones (m)
 
-    // =================== Cone Memory Parameters ===================
-    double cone_memory_search_radius_;              // Search radius for associating new cones with memory (m)
-    double cone_memory_association_threshold_;      // Minimum association confidence to consider a match
-
     // =================== Curvature-based Speed Planning Parameters ===================
     double max_speed_;              // maximum speed (m/s)
     double min_speed_;              // minimum speed (m/s)
     double curvature_gain_;         // curvature gain for speed adjustment
-
-    // =================== Racing Mode Parameters =================== 2랩 이후 On
-    double racing_max_speed_;
-    double racing_min_speed_;
 
     // Print current parameters
     void print() const {
@@ -1327,8 +1370,6 @@ struct TrajectoryParams {
         printf("Max cone distance: %.3f m\n", max_cone_distance_);
         printf("Lane offset: %.3f m\n", lane_offset_);
         printf("Safety margin: %.3f m\n", safety_margin_);
-        printf("Cone memory search radius: %.3f m\n", cone_memory_search_radius_);
-        printf("Cone memory association threshold: %.3f m\n", cone_memory_association_threshold_);
         printf("Max speed: %.3f m/s\n", max_speed_);
         printf("Min speed: %.3f m/s\n", min_speed_);
         printf("Curvature gain: %.3f\n", curvature_gain_);
@@ -1339,21 +1380,16 @@ struct TrajectoryParams {
         std::cout << "FormulaAutonomousSystem: Local planning parameters file updated" << std::endl;
         
         // =================== Trajectory Parameters ===================
-        if(!pnh.getParam("/local_planning/trajectory/lookahead_distance", lookahead_distance_)){std::cerr<<"Param local_planning/trajectory/lookahead_distance has error" << std::endl; return false;}
-        if(!pnh.getParam("/local_planning/trajectory/waypoint_spacing", waypoint_spacing_)){std::cerr<<"Param local_planning/trajectory/waypoint_spacing has error" << std::endl; return false;}
-        if(!pnh.getParam("/local_planning/trajectory/default_speed", default_speed_)){std::cerr<<"Param local_planning/trajectory/default_speed has error" << std::endl; return false;}
-        if(!pnh.getParam("/local_planning/trajectory/max_cone_distance", max_cone_distance_)){std::cerr<<"Param local_planning/trajectory/max_cone_distance has error" << std::endl; return false;}
-        if(!pnh.getParam("/local_planning/trajectory/lane_offset", lane_offset_)){std::cerr<<"Param local_planning/trajectory/lane_offset has error" << std::endl; return false;}
-        if(!pnh.getParam("/local_planning/trajectory/safety_margin", safety_margin_)){std::cerr<<"Param local_planning/trajectory/safety_margin has error" << std::endl; return false;}
-        if(!pnh.getParam("/local_planning/trajectory/cone_memory_search_radius", cone_memory_search_radius_)){std::cerr<<"Param local_planning/trajectory/cone_memory_search_radius has error" << std::endl; return false;}
-        if(!pnh.getParam("/local_planning/trajectory/cone_memory_association_threshold", cone_memory_association_threshold_)){std::cerr<<"Param local_planning/trajectory/cone_memory_association_threshold has error" << std::endl; return false;}
-        if(!pnh.getParam("/local_planning/trajectory/max_speed", max_speed_)){std::cerr<<"Param local_planning/trajectory/max_speed has error" << std::endl; return false;}
-        if(!pnh.getParam("/local_planning/trajectory/min_speed", min_speed_)){std::cerr<<"Param local_planning/trajectory/min_speed has error" << std::endl; return false;}
-        if(!pnh.getParam("/local_planning/trajectory/curvature_gain", curvature_gain_)){std::cerr<<"Param local_planning/trajectory/curvature_gain has error" << std::endl; return false;}
-        
-        // Racing mode
-        if(!pnh.getParam("/local_planning/trajectory/racing_max_speed", racing_max_speed_)){std::cerr<<"Param local_planning/trajectory/racing_max_speed has error" << std::endl; return false;}
-        if(!pnh.getParam("/local_planning/trajectory/racing_min_speed", racing_min_speed_)){std::cerr<<"Param local_planning/trajectory/racing_min_speed has error" << std::endl; return false;}
+        if(!pnh.getParam("/planning/trajectory/lookahead_distance", lookahead_distance_)){std::cerr<<"Param planning/trajectory/lookahead_distance has error" << std::endl; return false;}
+        if(!pnh.getParam("/planning/trajectory/waypoint_spacing", waypoint_spacing_)){std::cerr<<"Param planning/trajectory/waypoint_spacing has error" << std::endl; return false;}
+        if(!pnh.getParam("/planning/trajectory/default_speed", default_speed_)){std::cerr<<"Param planning/trajectory/default_speed has error" << std::endl; return false;}
+        if(!pnh.getParam("/planning/trajectory/max_cone_distance", max_cone_distance_)){std::cerr<<"Param planning/trajectory/max_cone_distance has error" << std::endl; return false;}
+        if(!pnh.getParam("/planning/trajectory/lane_offset", lane_offset_)){std::cerr<<"Param planning/trajectory/lane_offset has error" << std::endl; return false;}
+        if(!pnh.getParam("/planning/trajectory/safety_margin", safety_margin_)){std::cerr<<"Param planning/trajectory/safety_margin has error" << std::endl; return false;}
+        if(!pnh.getParam("/planning/trajectory/max_speed", max_speed_)){std::cerr<<"Param planning/trajectory/max_speed has error" << std::endl; return false;}
+        if(!pnh.getParam("/planning/trajectory/min_speed", min_speed_)){std::cerr<<"Param planning/trajectory/min_speed has error" << std::endl; return false;}
+        if(!pnh.getParam("/planning/trajectory/curvature_gain", curvature_gain_)){std::cerr<<"Param planning/trajectory/curvature_gain has error" << std::endl; return false;}
+
         return true;
     }
 };
@@ -1376,8 +1412,7 @@ struct ControlParams {
     double pid_ki_;                   // integral gain
     double pid_kd_;                   // differential gain
     double max_throttle_;             // maximum throttle (0.0 to 1.0)
-
-    double steering_based_speed_gain_; // 스티어링 기반 속도 감속 게인(추가)
+    
     // =================== Vehicle Specification ===================
     double vehicle_length_;           // 차량 축거 (Wheelbase) (m)
 
@@ -1400,15 +1435,15 @@ struct ControlParams {
         if(!pnh.getParam("/control/SpeedControl/pid_kd", pid_kd_)){std::cerr<<"Param control/SpeedControl/pid_kd has error" << std::endl; return false;}
         if(!pnh.getParam("/control/SpeedControl/max_throttle", max_throttle_)){std::cerr<<"Param control/SpeedControl/max_throttle has error" << std::endl; return false;}
         
-        if(!pnh.getParam("/control/SpeedControl/steering_based_speed_gain", steering_based_speed_gain_)){std::cerr<<"Param control/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
-
         if(!pnh.getParam("/control/Vehicle/wheel_base", vehicle_length_)){std::cerr<<"Param control/Vehicle/wheel_base has error" << std::endl; return false;}
         
         return true;
     }
 };
 
-// ==================== Algorithm ====================
+// ====================================================================
+// ======================== ALGORITHM CLASSES =========================
+// ====================================================================
 
 // Perception
 
@@ -1591,6 +1626,43 @@ private:
     double prev_gps_time_sec_;
 };
 
+// Mapping
+/**
+ * @class MapManager
+ * @brief Updates and manages the global cone map
+ */
+class MapManager {
+public:
+    explicit MapManager(const std::shared_ptr<MappingParams>& params);
+
+    /**
+     * @brief Updates the global cone map with new cones and returns the cone list to be used for planning
+     * @param current_state vehicle state (global frame)
+     * @param real_time_cones real-time detected cones (vehicle frame)
+     * @return std::vector<Cone> Updated list of cones for planning (vehicle frame)
+     */
+
+    std::vector<Cone> updateAndGetPlannedCones(const VehicleState& current_state, const std::vector<Cone>& real_time_cones);
+    std::vector<Cone> getGlobalConeMap() const;
+    void generateLanesFromMemory();
+    std::pair<std::vector<Eigen::Vector2d>, std::vector<Eigen::Vector2d>> getTrackLanes();
+    // 보정한 맵 생성
+    void refineConeMap();
+
+private:
+    // Function
+    std::vector<Eigen::Vector2d> sortConesByProximity(const std::vector<Eigen::Vector2d>& cones);
+
+    // Variable
+    std::shared_ptr<MappingParams> params_;
+    std::vector<Cone> cone_memory_; // Memory of global cones
+    mutable std::mutex cone_memory_mutex_;
+    std::vector<Eigen::Vector2d> left_lane_points_;
+    std::vector<Eigen::Vector2d> right_lane_points_;
+    // 차선 추종 보정을 위한 헬퍼함수
+    double pointToLineSegmentDistance(const Eigen::Vector2d& p, const Eigen::Vector2d& v, const Eigen::Vector2d& w);
+};
+
 // Planning
 class StateMachine {
 public:
@@ -1651,101 +1723,50 @@ private:
     std::map<std::pair<ASState, ASState>, bool> valid_transitions_;
 };
 
-// Trajectory waypoint
-struct TrajectoryPoint {
-    Eigen::Vector2d position;   // x, y position
-    double yaw;                 // heading angle (radians)
-    double curvature;           // path curvature (1/radius)
-    double speed;               // target speed (m/s)
-    double s;                   // arc length from start
-    
-    // initialize with default values
-    TrajectoryPoint(double x = 0.0, double y = 0.0, double yaw_val = 0.0, 
-                   double curv = 0.0, double spd = 0.0, double s_val = 0.0)
-        : position(x, y), yaw(yaw_val), curvature(curv), speed(spd), s(s_val) {}
-};
-
-// Trajectory Generator class
 class TrajectoryGenerator {
 public:
-    explicit TrajectoryGenerator(const std::shared_ptr<TrajectoryParams>& params);
+    explicit TrajectoryGenerator(const std::shared_ptr<PlanningParams>& params);
     ~TrajectoryGenerator() = default;
     
     // Generate trajectory from cones and current planning state
-    std::vector<TrajectoryPoint> generateTrajectory(const std::vector<Cone>& cones, ASState planning_state, bool is_map_complete);
-    /**
-     * @brief Update trajectory parameters
-     * @param params New parameters
-     */
-    void updateParams(const std::shared_ptr<TrajectoryParams>& params) { params_ = params; }
-    
+    std::vector<TrajectoryPoint> generateTrajectory(const std::vector<Cone>& cones, ASState planning_state);
+
     /**
      * @brief Get last generated trajectory
      * @return Last trajectory
      */
     const std::vector<TrajectoryPoint>& getLastTrajectory() const { return last_trajectory_; }
+
+    /**
+     * @brief Update trajectory parameters
+     * @param params New parameters
+     */
+    void updateParams(const std::shared_ptr<PlanningParams>& params) { params_ = params; }
+    
+    const std::shared_ptr<PlanningParams>& getParams() const { return params_; }
     
     /**
      * @brief Print trajectory statistics
      */
     void printTrajectoryStats() const;
 
+    
+
 private:
     // Utility functions
-    std::vector<TrajectoryPoint> generateStopTrajectory();
     double calculateCurvature(const tk::spline& s, double x);
     double calculateDistance(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2) const;
     double calculateAngle(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2) const;
-    
+    std::vector<TrajectoryPoint> generateStopTrajectory();
+
     // Member variables
-    std::shared_ptr<TrajectoryParams> params_;
+    std::shared_ptr<PlanningParams> params_;
     std::vector<TrajectoryPoint> last_trajectory_;
     
     // Statistics
     int generated_trajectories_;
     double average_generation_time_;
     double last_generation_time_;
-};
-
-// Mapping
-/**
- * @class MapManager
- * @brief Updates and manages the global cone map
- */
-class MapManager {
-public:
-    explicit MapManager(const std::shared_ptr<TrajectoryParams>& params);
-
-    /**
-     * @brief Updates the global cone map with new cones and returns the cone list to be used for planning
-     * @param current_state vehicle state (global frame)
-     * @param real_time_cones real-time detected cones (vehicle frame)
-     * @return std::vector<Cone> Updated list of cones for planning (vehicle frame)
-     */
-
-    std::vector<Cone> updateAndGetPlannedCones(const VehicleState& current_state, const std::vector<Cone>& real_time_cones);
-    // 저장된 모든 콘 데이터를 반환하는 함수
-    std::vector<Cone> getStoredCones();
-    // ==================== [추가될 코드 시작] ====================
-    // 생성된 좌/우 차선을 반환하는 함수
-    std::pair<std::vector<Eigen::Vector2d>, std::vector<Eigen::Vector2d>> getTrackLanes();
-
-private:
-    // 차선을 생성하는 내부 함수
-    void generateLanesFromMemory();
-    // 근접 이웃 방식으로 콘을 정렬하는 헬퍼 함수
-    std::vector<Eigen::Vector2d> sortConesByProximity(const std::vector<Eigen::Vector2d>& cones);
-
-    // 생성된 차선 데이터를 저장할 멤버 변수
-    std::vector<Eigen::Vector2d> left_lane_points_;
-    std::vector<Eigen::Vector2d> right_lane_points_;
-    bool lanes_generated_;
-    // ==================== [추가될 코드 끝] ====================
-
-private:
-    std::shared_ptr<TrajectoryParams> params_;
-    std::vector<Cone> cone_memory_; // Memory of global cones
-    std::mutex cone_memory_mutex_;
 };
 
 // Control
@@ -1835,7 +1856,9 @@ private:
     bool first_run_;
 };
 
-// ==================== Formula Autonomous System ====================
+// ====================================================================
+// ==================== Formula Autonomous System =====================
+// ====================================================================
 
 class FormulaAutonomousSystem
 {
@@ -1846,8 +1869,16 @@ public:
 // Functions
 public:
     bool init(ros::NodeHandle& pnh);
-
     bool getParameters();
+
+    std::vector<Cone> getGlobalConeMap() const;
+    int getCurrentLap() const { return current_lap_; }
+    std::pair<std::vector<Eigen::Vector2d>, std::vector<Eigen::Vector2d>> getGlobalTrackLanes() const {
+        if (map_manager_) {
+            return map_manager_->getTrackLanes();
+        }
+        return {};
+    }
 
     private: // Main thread
 
@@ -1860,68 +1891,75 @@ public: // Function components
              fs_msgs::GoSignal& go_signal_msg,
              fs_msgs::ControlCommand& control_command_msg,
              std_msgs::String& autonomous_mode_msg);
-
-    int getLapCount() const { return lap_counter_; }        //  lap count
-             
+            
 private:
     void getLidarPointCloud(sensor_msgs::PointCloud2& msg, pcl::PointCloud<pcl::PointXYZ>::Ptr& point_cloud);
     void getCameraImage(sensor_msgs::Image& msg, cv::Mat& image);
     void getImuData(sensor_msgs::Imu& msg, Eigen::Vector3d& acc, Eigen::Vector3d& gyro, Eigen::Quaterniond& orientation);
-    void checkLapCompletion(const VehicleState& current_state);     // lapcompletion
+    void setRacingStrategy(const VehicleState& vehicle_state, const std::vector<Cone>& cones_for_planning);
+    void defineStartFinishLine(const std::vector<Cone>& cones);
+    void updateLapCount(const VehicleState& current_state);
+    void generateGlobalPath();
 
 // Variables
 private:
     bool is_initialized_;
     ros::NodeHandle pnh_;
 
-    // lap counter
-    int lap_counter_;
-    bool is_map_complete_;
-    int last_pos_relative_to_start_line_; // 출발선 기준 차량의 이전 위치 (-1: 뒤, 1: 앞)
-    bool has_crossed_start_line_once_; // 첫 출발선을 통과했는지 여부
-
-public:
     // Perception
     std::shared_ptr<PerceptionParams> perception_params_;
-
     std::unique_ptr<RoiExtractor> roi_extractor_;
-    pcl::PointCloud<pcl::PointXYZ>::Ptr roi_point_cloud_;
-
     std::unique_ptr<GroundRemoval> ground_removal_;
-    pcl::PointCloud<pcl::PointXYZ>::Ptr ground_point_cloud_;
-    pcl::PointCloud<pcl::PointXYZ>::Ptr non_ground_point_cloud_;
-    
     std::unique_ptr<Clustering> clustering_;
-    std::vector<Cone> cones_;
     
     std::unique_ptr<ColorDetection> color_detection_;
-    cv::Mat projected_cones_image_;
 
     // Localization
     std::shared_ptr<LocalizationParams> localization_params_;
-    std::unique_ptr<Localization> localization_;
 
-    // Planning
-
-    // Behavior planning
+    // Mapping
+    std::shared_ptr<MappingParams> mapping_params_;
+    std::unique_ptr<MapManager> map_manager_;
 
     // State machine
     std::unique_ptr<StateMachine> state_machine_;
     ASState planning_state_;
 
-    // Local planning
-    std::shared_ptr<TrajectoryParams> local_planning_params_;
-    std::unique_ptr<TrajectoryGenerator> trajectory_generator_;
-    std::vector<TrajectoryPoint> trajectory_points_;
+    // Driving mode and lap counting
+    DrivingMode current_mode_;
+    int current_lap_;
+    Eigen::Vector2d start_finish_line_center_;
+    double start_finish_line_yaw_;
+    bool is_start_finish_line_defined_;
+    bool just_crossed_line_;
 
-    // Global mapping
-    std::unique_ptr<MapManager> map_manager_;
+    // Trajectory planning
+    std::shared_ptr<PlanningParams> planning_params_;
+    
+    std::vector<TrajectoryPoint> global_path_;
+    bool is_global_path_generated_;
 
     // Control
     std::shared_ptr<ControlParams> control_params_;
-
     std::unique_ptr<LateralController> lateral_controller_;
     std::unique_ptr<PIDController> longitudinal_controller_;
+
+public:
+    // Odometry & TF broadcasting
+    std::unique_ptr<Localization> localization_;
+
+    // PointCloud for visualization
+    pcl::PointCloud<pcl::PointXYZ>::Ptr roi_point_cloud_;
+    pcl::PointCloud<pcl::PointXYZ>::Ptr ground_point_cloud_;
+    pcl::PointCloud<pcl::PointXYZ>::Ptr non_ground_point_cloud_;
+    
+    // Cone data for visualization
+    std::vector<Cone> cones_;
+    cv::Mat projected_cones_image_;
+    
+    // Trajectory for visualization
+    std::unique_ptr<TrajectoryGenerator> trajectory_generator_; //시각화 코드에도 필요해서 public으로 바꿈
+    std::vector<TrajectoryPoint> trajectory_points_;
 };
 
 
