@@ -1919,7 +1919,7 @@ private:
 
 // Variables
 private:
-    bool is_initialized_;
+    bool is_initialized_ = false;
     ros::NodeHandle pnh_;
 
     // Perception
@@ -1936,7 +1936,8 @@ private:
     // Mapping
     std::shared_ptr<MappingParams> mapping_params_;
     std::unique_ptr<MapManager> map_manager_;
-
+    std::chrono::steady_clock::time_point last_lap_crossing_time_;
+    Eigen::Vector2d previous_position_;
     // State machine
     std::unique_ptr<StateMachine> state_machine_;
     ASState planning_state_;
