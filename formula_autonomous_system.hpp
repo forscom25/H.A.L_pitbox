@@ -1417,11 +1417,12 @@ struct ControlParams {
     double stanley_k_gain_; // Stanley controller gain k
 
     // =================== Longitudinal Control: PID Controller ===================
-    double pid_kp_;                   // proportional gain
-    double pid_ki_;                   // integral gain
-    double pid_kd_;                   // differential gain
-    double max_throttle_;             // maximum throttle (0.0 to 1.0)
-    
+    double pid_kp_;                    // proportional gain
+    double pid_ki_;                    // integral gain
+    double pid_kd_;                    // differential gain
+    double max_throttle_;              // maximum throttle (0.0 to 1.0)
+    double steering_based_speed_gain_; // Gain for steering-based speed dampening
+
     // =================== Vehicle Specification ===================
     double vehicle_length_;           // 차량 축거 (Wheelbase) (m)
 
@@ -1443,7 +1444,9 @@ struct ControlParams {
         if(!pnh.getParam("/control/SpeedControl/pid_ki", pid_ki_)){std::cerr<<"Param control/SpeedControl/pid_ki has error" << std::endl; return false;}
         if(!pnh.getParam("/control/SpeedControl/pid_kd", pid_kd_)){std::cerr<<"Param control/SpeedControl/pid_kd has error" << std::endl; return false;}
         if(!pnh.getParam("/control/SpeedControl/max_throttle", max_throttle_)){std::cerr<<"Param control/SpeedControl/max_throttle has error" << std::endl; return false;}
-        
+        if(!pnh.getParam("/control/SpeedControl/steering_based_speed_gain", steering_based_speed_gain_)){std::cerr<<"Param control/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
+
+
         if(!pnh.getParam("/control/Vehicle/wheel_base", vehicle_length_)){std::cerr<<"Param control/Vehicle/wheel_base has error" << std::endl; return false;}
         
         return true;
@@ -1660,6 +1663,15 @@ public:
 private:
     // Function
     std::vector<Eigen::Vector2d> sortConesByProximity(const std::vector<Eigen::Vector2d>& cones);
+
+    /**
+     * @brief Helper function to calculate the shortest distance between a point and a line segment.
+     * @param p The target point.
+     * @param v The starting point of the line segment.
+     * @param w The end point of the line segment.
+     * @return double The shortest distance between the point and the line segment.
+     */
+
     double pointToLineSegmentDistance(const Eigen::Vector2d& p, const Eigen::Vector2d& v, const Eigen::Vector2d& w);
 
 

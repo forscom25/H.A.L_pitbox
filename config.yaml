@@ -129,7 +129,7 @@ mapping:
 
   # Cone sorting parameters for lane generation
   max_connection_distance: 10.0
-  direction_weight: 0.5 # (0.0 ~1.0)
+  direction_weight: 0.5 # Path direction consistency weight (0.0 ~1.0)
 
   # Cone map refinement parameters
   max_dist_from_lane: 2.0
@@ -187,6 +187,9 @@ control:
     pid_ki: 0.01
     pid_kd: 0.02
     max_throttle: 0.6
+
+    # Gain for steering-based speed dampening. Higher value means more aggressive slowing on turns.
+    steering_based_speed_gain: 0.2
 
   Vehicle:
     wheel_base: 1.55
