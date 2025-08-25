@@ -4,7 +4,6 @@
  * @brief 
  * @version 0.1
  * @date 2025-07-21
- * 
  * @copyright Copyright (c) 2025
  */
 
@@ -92,8 +91,10 @@ public: // Function components
 
     bool checkEssentialMessages();
 
-    public: // ROS
+public: // ROS
     // Callback functions
+
+    // mutex for message synchronization, able to handle multiple messages
     void lidarCallback(const sensor_msgs::PointCloud2::ConstPtr& msg){
         std::lock_guard<std::mutex> lock(lidar_msg_mutex_);
         lidar_msg_ = *msg;
@@ -133,16 +134,17 @@ public: // Function components
     void publishDetectedConesMarker();
     void publishProjectedConesImage();
     void publishCenterLineMarker();
-    void publishLapCountMarker();           //lap counter
-    void publishStoredConesMarker();        // stored cones
-    void publishTrackLanesMarker();         // track lanes
-    void publishStartFinishLineMarker();    // finish line
+    void publishLaneMarker();
+    void publishLapCountMarker();
+    void publishGlobalPathMarker();
+    void publishFinishLineMarker();
 
 // Variables
 private:
     bool is_initialized_;
     double main_loop_rate_;
-    
+    bool is_ready_to_publish_;
+
 public: // ROS
     ros::NodeHandle nh_;
     ros::NodeHandle pnh_;
@@ -188,11 +190,10 @@ public: // ROS
     ros::Publisher detected_cones_marker_pub_;
     ros::Publisher projected_cones_image_pub_;
     ros::Publisher center_line_marker_pub_;
-    
-    ros::Publisher lap_count_marker_pub_;           // lap counter
-    ros::Publisher stored_cones_marker_pub_;        // stored cones
-    ros::Publisher track_lanes_marker_pub_;         // track lanes
-    ros::Publisher start_finish_line_marker_pub_;   // finish line
+    ros::Publisher lap_count_marker_pub_;
+    ros::Publisher lane_marker_pub_;
+    ros::Publisher finish_line_marker_pub_;
+    ros::Publisher global_path_marker_pub_;
 
     // Output messages
     fs_msgs::ControlCommand control_command_msg_;
