@@ -1321,12 +1321,18 @@ struct MappingParams {
     // =================== Mapping Parameters ===================
     double cone_memory_search_radius_;              // Search radius for associating new cones with memory (m)
     double cone_memory_association_threshold_;      // Minimum association confidence to consider a match
+    double max_connection_distance_;                // Maximum distance to connect cones (m)
+    double direction_weight_;                       // Weight for direction consistency in cone sorting
+    double max_dist_from_lane_; // Maximum distance from lane to consider a cone valid (m)
     
     // Print parameters for debugging
     void print() const {
         printf("=== Mapping Parameters ===\n");
         printf("Cone memory search radius: %.3f m\n", cone_memory_search_radius_);
         printf("Cone memory association threshold: %.3f m\n", cone_memory_association_threshold_);
+        printf("Max connection distance: %.3f m\n", max_connection_distance_);
+        printf("Direction wight: %.3f m\n", direction_weight_);
+        printf("Max dist from lane: %.3f m\n", max_dist_from_lane_);
     }
     
     // Load parameters from ROS NodeHandle
@@ -1336,6 +1342,9 @@ struct MappingParams {
         // =================== Mapping Parameters ===================
         if(!pnh.getParam("/mapping/cone_memory_search_radius", cone_memory_search_radius_)){std::cerr<<"Param mapping/cone_memory_search_radius has error" << std::endl; return false;}
         if(!pnh.getParam("/mapping/cone_memory_association_threshold", cone_memory_association_threshold_)){std::cerr<<"Param mapping/cone_memory_association_threshold has error" << std::endl; return false;}
+        if(!pnh.getParam("/mapping/max_connection_distance", max_connection_distance_)){std::cerr<<"Param mapping/max_connection_distance has error" << std::endl; return false;}
+        if(!pnh.getParam("/mapping/direction_weight", direction_weight_)){std::cerr<<"Param mapping/direction_weight has error" << std::endl; return false;}
+        if(!pnh.getParam("/mapping/max_dist_from_lane", max_dist_from_lane_)){std::cerr<<"Param mapping/max_dist_from_lane has error" << std::endl; return false;}
         
         return true;
     }
@@ -1646,10 +1655,13 @@ public:
     std::vector<Cone> getGlobalConeMap() const;
     void generateLanesFromMemory();
     std::pair<std::vector<Eigen::Vector2d>, std::vector<Eigen::Vector2d>> getTrackLanes();
+    void refineConeMap();
 
 private:
     // Function
     std::vector<Eigen::Vector2d> sortConesByProximity(const std::vector<Eigen::Vector2d>& cones);
+    double pointToLineSegmentDistance(const Eigen::Vector2d& p, const Eigen::Vector2d& v, const Eigen::Vector2d& w);
+
 
     // Variable
     std::shared_ptr<MappingParams> params_;

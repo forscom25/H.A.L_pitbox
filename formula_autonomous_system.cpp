@@ -1032,6 +1032,9 @@ std::vector<Eigen::Vector2d> MapManager::sortConesByProximity(const std::vector<
     std::vector<Eigen::Vector2d> sorted_cones;
     std::vector<Eigen::Vector2d> remaining_cones = cones;
 
+    const double max_connection_distance = params_->max_connection_distance_;
+    const double direction_weight = params_->direction_weight_;
+
     // Start from the cone with the smallest x coordinate (closest to the vehicle)
     auto start_it = std::min_element(remaining_cones.begin(), remaining_cones.end(),
         [](const Eigen::Vector2d& a, const Eigen::Vector2d& b) {
@@ -1040,25 +1043,55 @@ std::vector<Eigen::Vector2d> MapManager::sortConesByProximity(const std::vector<
 
     sorted_cones.push_back(*start_it);
     remaining_cones.erase(start_it);
+
+    // Vehicle heading(x) as initial direction
+    Eigen::Vector2d current_direction(1.0, 0.0);
     
     // Repeat until all cones are sorted
     while (!remaining_cones.empty()) {
 
         Eigen::Vector2d current_point = sorted_cones.back();
-        double min_dist_sq = std::numeric_limits<double>::max();
-        auto closest_it = remaining_cones.begin();
+        
+        // Update direction vector
+        if (sorted_cones.size() > 1) {
+            current_direction = (sorted_cones.back() - sorted_cones[sorted_cones.size() - 2]).normalized();
+        }
+
+        double best_score = std::numeric_limits<double>::max();
+        auto best_it = remaining_cones.begin();
 
         for (auto it = remaining_cones.begin(); it != remaining_cones.end(); ++it) {
-            double dist_sq = (it->x() - current_point.x()) * (it->x() - current_point.x()) +
+            double dist = (it->x() - current_point.x()) * (it->x() - current_point.x()) +
                              (it->y() - current_point.y()) * (it->y() - current_point.y());
-            if (dist_sq < min_dist_sq) {
-                min_dist_sq = dist_sq;
-                closest_it = it;
+            dist = std::sqrt(dist);
+
+            // noise filter
+            if (dist > max_connection_distance) {
+                continue;
+            }
+
+            // Cost function based on direction vectors
+            Eigen::Vector2d candidate_direction = (*it - current_point).normalized();
+            double dot_product = current_direction.dot(candidate_direction); // scalar product of two direction vector (correlation)
+
+            // Cost function(lower the better)
+            double score = dist * (1.0 + direction_weight * (1.0 - dot_product));
+
+            if (score < best_score) {
+                best_score = score;
+                best_it = it;
             }
         }
-        sorted_cones.push_back(*closest_it);
-        remaining_cones.erase(closest_it);
+
+
+        if (best_score == std::numeric_limits<double>::max()) {
+            break;
+        }
+
+        sorted_cones.push_back(*best_it);
+        remaining_cones.erase(best_it);
     }
+
     return sorted_cones;
 }
 
@@ -1144,6 +1177,83 @@ void MapManager::generateLanesFromMemory() {
     }
 }
 
+void MapManager::refineConeMap() {
+    std::lock_guard<std::mutex> lock(cone_memory_mutex_);
+
+    // 1. Generate lane prototype (guideline)
+    generateLanesFromMemory();
+
+    // Check sufficiency
+    if (left_lane_points_.size() < 2 && right_lane_points_.size() < 2) {
+        ROS_WARN("MapManager: Not enough lane points to refine cone map. Skipping.");
+        return;
+    }
+
+    // New memory vector for refined cone data
+    std::vector<Cone> refined_cone_memory;
+    const double max_dist_threshold = params_->max_dist_from_lane_; 
+
+    // 2. Classification of every cone data
+    for (const auto& cone : cone_memory_) {
+        // Already classified
+        if (cone.color != "unknown") {
+            refined_cone_memory.push_back(cone);
+            continue;
+        }
+
+        // Verify and correct the unknowns
+        Eigen::Vector2d cone_pos(cone.center.x, cone.center.y);
+        double min_dist_to_left_lane = std::numeric_limits<double>::max();
+        double min_dist_to_right_lane = std::numeric_limits<double>::max();
+
+        // 3. Calculate minimum distance from left(blue) lane
+        if (left_lane_points_.size() >= 2) {
+            for (size_t i = 0; i < left_lane_points_.size() - 1; ++i) {
+                double dist = pointToLineSegmentDistance(cone_pos, left_lane_points_[i], left_lane_points_[i + 1]);
+                min_dist_to_left_lane = std::min(dist, min_dist_to_left_lane);
+            }
+        }
+
+        // 4. Calculate minimum distance from right(yellow) lane
+        if (right_lane_points_.size() >= 2) {
+            for (size_t i = 0; i < right_lane_points_.size() - 1; ++i) {
+                double dist = pointToLineSegmentDistance(cone_pos, right_lane_points_[i], right_lane_points_[i + 1]);
+                min_dist_to_right_lane = std::min(dist, min_dist_to_right_lane);
+            }
+        }
+
+        // 5. Filter noise and decide color
+        double closest_lane_dist = std::min(min_dist_to_left_lane, min_dist_to_right_lane);
+
+        if (closest_lane_dist < max_dist_threshold) {// noise filter
+            
+            Cone refined_cone = cone;
+            if (min_dist_to_left_lane < min_dist_to_right_lane) {
+                refined_cone.color = "blue";
+            } else {
+                refined_cone.color = "yellow";
+            }
+            refined_cone_memory.push_back(refined_cone);
+        } else {
+            // 차선과 너무 멀리 떨어져 있다면, 노이즈로 판단하고 맵에서 제거 (새로운 메모리에 추가하지 않음)
+            ROS_DEBUG("MapManager: Discarding a noisy object far from lanes at (%.2f, %.2f)", cone.center.x, cone.center.y);
+        }
+    }
+
+    // 6. Update the global cone map
+    cone_memory_ = refined_cone_memory;
+
+    ROS_INFO("MapManager: Cone map refinement complete. Total cones: %zu", cone_memory_.size());
+}
+
+// 헬퍼 함수: 점과 선분 사이의 최단 거리 계산
+double MapManager::pointToLineSegmentDistance(const Eigen::Vector2d& p, const Eigen::Vector2d& v, const Eigen::Vector2d& w) {
+    double l2 = (v - w).squaredNorm();
+    if (l2 == 0.0) return (p - v).norm();
+    double t = std::max(0.0, std::min(1.0, (p - v).dot(w - v) / l2));
+    Eigen::Vector2d projection = v + t * (w - v);
+    return (p - projection).norm();
+}
 
 // =================================================================================================
 // ========================================== 4. Planning ==========================================
