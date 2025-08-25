@@ -4,7 +4,6 @@
  * @brief 
  * @version 0.1
  * @date 2025-07-21
- * 
  * @copyright Copyright (c) 2025
  */
 
@@ -15,6 +14,7 @@ FormulaAutonomousSystemNode::FormulaAutonomousSystemNode():
     main_loop_rate_(1000.0),
     nh_("~"),
     pnh_("~"),
+    is_ready_to_publish_(false),
     lidar_msg_(),
     camera1_msg_(),
     camera2_msg_(),
@@ -68,19 +68,19 @@ bool FormulaAutonomousSystemNode::init(){
     detected_cones_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/detected_cones_marker", 1);
     projected_cones_image_pub_ = nh_.advertise<sensor_msgs::Image>("/fsds/projected_cones_image", 1);
     center_line_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/center_line_marker", 1);
-
-    lap_count_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lap_count_marker", 1);            // lap counter
-    stored_cones_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/stored_cones_marker", 1);      // stored cones
-    track_lanes_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/track_lanes_marker", 1);        // track lanes
-    start_finish_line_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("/fsds/start_finish_line_marker", 1); // finish line
-
+    lap_count_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lap_count_marker", 1);
+    lane_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lane_marker", 1);
+    finish_line_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/finish_line_marker", 1);
+    global_path_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/global_path_marker", 1);
+    
     // Get parameters
     pnh_.getParam("/system/main_loop_rate", main_loop_rate_);
 
     // Algorithms
     formula_autonomous_system_ = std::make_unique<FormulaAutonomousSystem>();
     formula_autonomous_system_->init(pnh_);
-    
+
+    is_ready_to_publish_ = true;
     is_initialized_ = true;
     return true;
 }
@@ -95,7 +95,7 @@ void FormulaAutonomousSystemNode::run(){
     if(checkEssentialMessages() == false){
         return;
     }
-
+    
     // Get lidar point cloud
     lidar_msg_mutex_.lock();
     auto lidar_msg = lidar_msg_;
@@ -137,6 +137,9 @@ void FormulaAutonomousSystemNode::run(){
 }
 
 void FormulaAutonomousSystemNode::publish(){
+    if (!is_ready_to_publish_){
+        return;
+    }
 
     // Publish
     publishControl();
@@ -147,10 +150,11 @@ void FormulaAutonomousSystemNode::publish(){
     publishDetectedConesMarker();
     publishProjectedConesImage();
     publishCenterLineMarker();
-    publishLapCountMarker();            // lap counter
-    publishStoredConesMarker();         // stored cones
-    publishTrackLanesMarker();          // track lanes
-    publishStartFinishLineMarker();     // finish line
+    publishLaneMarker();
+    publishLapCountMarker();
+    publishGlobalPathMarker();
+    publishFinishLineMarker();
+
     return;
 }
 
@@ -216,6 +220,7 @@ void FormulaAutonomousSystemNode::publishVehicleOdom(){
     odom.pose.pose.position.y = state[1];
     odom.pose.pose.position.z = 0.0;
     double yaw = state[2];
+    
     // Set rotation (orientation from yaw angle)
     tf2::Quaternion q;
     q.setRPY(0, 0, yaw);  // roll=0, pitch=0, yaw=pose[2]
@@ -263,7 +268,6 @@ void FormulaAutonomousSystemNode::publishNonGroundPointCloud(){
     non_ground_point_cloud_msg.header = header;
     non_ground_point_cloud_pub_.publish(non_ground_point_cloud_msg);
 
-    
     return;
 }
 
@@ -277,7 +281,6 @@ void FormulaAutonomousSystemNode::publishGroundPointCloud(){
     // Publish ground point cloud
     sensor_msgs::PointCloud2 ground_point_cloud_msg;
     pcl::toROSMsg(*formula_autonomous_system_->ground_point_cloud_, ground_point_cloud_msg);
-    ground_point_cloud_msg.header = header;
     ground_point_cloud_pub_.publish(ground_point_cloud_msg);
 
     return;
@@ -285,7 +288,6 @@ void FormulaAutonomousSystemNode::publishGroundPointCloud(){
 
 void FormulaAutonomousSystemNode::publishDetectedConesMarker(){
     // Publish
-
     // Get header
     lidar_msg_mutex_.lock();
     std_msgs::Header header = lidar_msg_.header;
@@ -348,306 +350,198 @@ void FormulaAutonomousSystemNode::publishProjectedConesImage(){
     cv_image.header = camera1_msg_.header;
     cv_image.encoding = sensor_msgs::image_encodings::BGR8;
     cv_image.image = formula_autonomous_system_->projected_cones_image_;
-    cv_image.toImageMsg(projected_cones_image_msg);
+    cv_image.toImageMsg(projected_cones_image_msg);  
     projected_cones_image_pub_.publish(projected_cones_image_msg);
     return;
 }
+//  =================================================================
+// 값을 6단계 색상 스펙트럼으로 변환하는 헬퍼 함수
+// value: 변환할 값 (예: 속도), min_value/max_value: 값의 범위
+std_msgs::ColorRGBA getColorByValue(double value, double min_value, double max_value) {
+    std_msgs::ColorRGBA color;
+    color.a = 1.0;
+
+    // 값을 0.0 ~ 1.0 사이로 정규화
+    double ratio = (value - min_value) / (max_value - min_value);
+    ratio = std::max(0.0, std::min(1.0, ratio)); // 0과 1 사이로 값 고정
+
+    // 6단계 색상 (빨강-주황-노랑-연두-하늘-파랑)
+    int stage = static_cast<int>(ratio / 0.2);
+    double local_ratio = (ratio - stage * 0.2) / 0.2;
+
+    switch (stage) {
+        case 0: // 빨강 -> 주황
+            color.r = 1.0;
+            color.g = local_ratio * 0.5;
+            color.b = 0.0;
+            break;
+        case 1: // 주황 -> 노랑
+            color.r = 1.0;
+            color.g = 0.5 + local_ratio * 0.5;
+            color.b = 0.0;
+            break;
+        case 2: // 노랑 -> 연두
+            color.r = 1.0 - local_ratio;
+            color.g = 1.0;
+            color.b = 0.0;
+            break;
+        case 3: // 연두 -> 하늘
+            color.r = 0.0;
+            color.g = 1.0;
+            color.b = local_ratio;
+            break;
+        case 4: // 하늘 -> 파랑
+        case 5: // ratio가 1.0일 때 포함
+            color.r = 0.0;
+            color.g = 1.0 - local_ratio;
+            color.b = 1.0;
+            break;
+    }
+    return color;
+}
 
 void FormulaAutonomousSystemNode::publishCenterLineMarker(){
-    // Publish
-    // Get header
+    // 헤더 정보 가져오기
     lidar_msg_mutex_.lock();
     std_msgs::Header header = lidar_msg_.header;
     lidar_msg_mutex_.unlock();
     header.frame_id = "fsds/FSCar";
 
-    // Publish center line marker
-    visualization_msgs::MarkerArray center_line_marker;
-    visualization_msgs::Marker marker_line;
-    marker_line.header = header;
-    marker_line.type = visualization_msgs::Marker::LINE_STRIP;
-    marker_line.action = visualization_msgs::Marker::ADD;
-    marker_line.lifetime = ros::Duration(0.1);  // Show for 0.1 seconds
-    marker_line.id = -1;  // Single line strip marker
-    marker_line.pose.orientation.x = 0.0;
-    marker_line.pose.orientation.y = 0.0;
-    marker_line.pose.orientation.z = 0.0;
-    marker_line.pose.orientation.w = 1.0;
-    marker_line.scale.x = 0.1;  // Line width
-    marker_line.color.r = 0.0;
-    marker_line.color.g = 1.0;
-    marker_line.color.b = 0.0;
-    marker_line.color.a = 1.0;
-    for(int i = 0; i < formula_autonomous_system_->trajectory_points_.size(); i++){
-        visualization_msgs::Marker marker_speed;
-        marker_speed.header = header;
-        marker_speed.type = visualization_msgs::Marker::LINE_STRIP;
-        marker_speed.action = visualization_msgs::Marker::ADD;
-        marker_speed.lifetime = ros::Duration(0.1);  // Show for 0.1 seconds
-        marker_speed.id = i;  // Single line strip marker
-        marker_speed.pose.orientation.x = 0.0;
-        marker_speed.pose.orientation.y = 0.0;
-        marker_speed.pose.orientation.z = 0.0;
-        marker_speed.pose.orientation.w = 1.0;
-        marker_speed.scale.x = 0.1;  // Line width
-        marker_speed.color.r = 0.0;
-        marker_speed.color.g = 1.0;
-        marker_speed.color.b = 0.0;
-        marker_speed.color.a = 1.0;
+    visualization_msgs::MarkerArray marker_array;
+    const auto& trajectory = formula_autonomous_system_->trajectory_points_;
 
-        // Add first point
-        geometry_msgs::Point first_point;
-        first_point.x = formula_autonomous_system_->trajectory_points_[i].position.x();
-        first_point.y = formula_autonomous_system_->trajectory_points_[i].position.y();
-        first_point.z = 0.0;
-        marker_speed.points.push_back(first_point);
+    if (trajectory.empty()) {
+        // 오래된 마커를 지우기 위해 빈 배열을 발행
+        center_line_marker_pub_.publish(marker_array);
+        return;
+    }
 
-        // Add last point
-        geometry_msgs::Point last_point;
-        last_point.x = formula_autonomous_system_->trajectory_points_[i].position.x();
-        last_point.y = formula_autonomous_system_->trajectory_points_[i].position.y();
-        last_point.z = formula_autonomous_system_->trajectory_points_[i].speed * 0.3; // 0.3 is a scale factor
-        marker_speed.points.push_back(last_point);
+    // --- 1. 경로 라인 (항상 회색으로 고정하여 속도 프로파일 강조) ---
+    visualization_msgs::Marker path_marker;
+    path_marker.header = header;
+    path_marker.ns = "path_line";
+    path_marker.id = 0;
+    path_marker.type = visualization_msgs::Marker::LINE_STRIP;
+    path_marker.action = visualization_msgs::Marker::ADD;
+    path_marker.lifetime = ros::Duration(0.1);
+    path_marker.pose.orientation.w = 1.0;
+    path_marker.scale.x = 0.15; // 라인 두께
+    path_marker.color.r = 0.5;  // 회색
+    path_marker.color.g = 0.5;
+    path_marker.color.b = 0.5;
+    path_marker.color.a = 0.6;  // 약간 투명하게
+
+    for(const auto& pt : trajectory){
+        geometry_msgs::Point p;
+        p.x = pt.position.x();
+        p.y = pt.position.y();
+        p.z = 0.05; // 지면보다 살짝 위에 표시
+        path_marker.points.push_back(p);
+    }
+    marker_array.markers.push_back(path_marker);
+
+
+    // --- 2. 속도 프로파일 (속도에 따른 높이 및 6단계 색상 변경) ---
+    visualization_msgs::Marker speed_marker;
+    speed_marker.header = header;
+    speed_marker.ns = "speed_profile";
+    speed_marker.id = 1;
+    speed_marker.type = visualization_msgs::Marker::LINE_LIST;
+    speed_marker.action = visualization_msgs::Marker::ADD;
+    speed_marker.lifetime = ros::Duration(0.1);
+    speed_marker.pose.orientation.w = 1.0;
+    speed_marker.scale.x = 0.1; // 라인 두께
+
+    // ✨ 핵심 변경: 차량의 '현재 실제 속도'를 기준으로 색상 범위를 동적으로 설정 (범위 확대)
+    double current_vehicle_speed = formula_autonomous_system_->localization_->getCurrentVelocity();
+    double speed_range = 2.5; // 현재 속도 기준 +- 2.5 m/s 범위를 색상으로 표현
+    double min_speed_for_viz = current_vehicle_speed - speed_range;
+    double max_speed_for_viz = current_vehicle_speed + speed_range;
+
+
+    for(const auto& pt : trajectory){
+        // 수직선의 시작점 (경로 위)
+        geometry_msgs::Point p_start;
+        p_start.x = pt.position.x();
+        p_start.y = pt.position.y();
+        p_start.z = 0.05;
         
-        // Add marker to array
-        center_line_marker.markers.push_back(marker_speed);
+        // 수직선의 끝점 (높이는 '계획된' 속도에 비례)
+        geometry_msgs::Point p_end = p_start;
+        p_end.z += pt.speed * 0.5; // 시각화를 위한 스케일 팩터
 
-        // Add line marker points
-        geometry_msgs::Point traj_point;
-        traj_point.x = formula_autonomous_system_->trajectory_points_[i].position.x();
-        traj_point.y = formula_autonomous_system_->trajectory_points_[i].position.y();
-        traj_point.z = 0.0;
-        marker_line.points.push_back(traj_point);
+        speed_marker.points.push_back(p_start);
+        speed_marker.points.push_back(p_end);
 
+        // '계획된' 속도를 '현재' 속도 기준으로 6단계 색상 계산
+        std_msgs::ColorRGBA speed_color = getColorByValue(pt.speed, min_speed_for_viz, max_speed_for_viz);
+        speed_marker.colors.push_back(speed_color);
+        speed_marker.colors.push_back(speed_color);
     }
-    center_line_marker.markers.push_back(marker_line);
-    center_line_marker_pub_.publish(center_line_marker);
+    marker_array.markers.push_back(speed_marker);
+
+    // 최종 마커 배열 발행
+    center_line_marker_pub_.publish(marker_array);
     return;
 }
-//  ==============================================================================
-//  저장된 콘 시각화
-void FormulaAutonomousSystemNode::publishStoredConesMarker() {
+//  =================================================================
+
+void FormulaAutonomousSystemNode::publishLaneMarker() {
+    // Get header from a reliable source like lidar message
     lidar_msg_mutex_.lock();
     std_msgs::Header header = lidar_msg_.header;
     lidar_msg_mutex_.unlock();
-    header.frame_id = "map"; // 저장된 콘은 'map' 전역 좌표계를 기준으로 함
-
-    auto stored_cones = formula_autonomous_system_->map_manager_->getStoredCones();
+    header.frame_id = "map"; // The frame should be the vehicle's base frame
 
     visualization_msgs::MarkerArray marker_array;
-    int id = 0;
-    for(const auto& cone : stored_cones){
-        visualization_msgs::Marker marker;
-        marker.header = header;
-        marker.ns = "stored_cones";
-        marker.id = id++;
-        marker.type = visualization_msgs::Marker::CYLINDER;
-        marker.action = visualization_msgs::Marker::ADD;
-        marker.lifetime = ros::Duration(); // 0으로 설정하여 마커가 사라지지 않게 함
-        marker.pose.position.x = cone.center.x;
-        marker.pose.position.y = cone.center.y;
-        marker.pose.position.z = cone.center.z;
-        marker.pose.orientation.w = 1.0;
-        marker.scale.x = 0.6;// 실시간 콘보다 약간 작게 표시
-        marker.scale.y = 0.6;
-        marker.scale.z = 0.4;
+    
+    // Get the generated lane points from the core system
+    auto lanes = formula_autonomous_system_->getGlobalTrackLanes();
+    auto left_lane_points = lanes.first;
+    auto right_lane_points = lanes.second;
 
-        if (cone.color == "yellow") {
-            marker.color.r = 1.0; marker.color.g = 1.0; marker.color.b = 0.0;
-        } else if (cone.color == "blue") {
-            marker.color.r = 0.0; marker.color.g = 0.0; marker.color.b = 1.0;
-        } else if (cone.color == "orange") { // 이 부분을 추가합니다.
-            marker.color.r = 1.0; marker.color.g = 0.5; marker.color.b = 0.0;
-        } else { // unknown or other colors
-            marker.color.r = 0.5; marker.color.g = 0.5; marker.color.b = 0.5;
-        }
-        marker.color.a = 0.75;// 투명도
-        marker_array.markers.push_back(marker);
-    }
-    stored_cones_marker_pub_.publish(marker_array);
-    return;
-}
-
-//  차선 시각화
-void FormulaAutonomousSystemNode::publishTrackLanesMarker(){
-    lidar_msg_mutex_.lock();
-    std_msgs::Header header = lidar_msg_.header;
-    lidar_msg_mutex_.unlock();
-    header.frame_id = "map";
-
-    auto lanes = formula_autonomous_system_->map_manager_->getTrackLanes();
-    std::vector<Eigen::Vector2d> left_lane = lanes.first;
-    std::vector<Eigen::Vector2d> right_lane = lanes.second;
-
-    visualization_msgs::MarkerArray marker_array;
-
-    // 왼쪽 차선 (파란색)
+    // --- Left Lane Marker (Blue) ---
     visualization_msgs::Marker left_lane_marker;
     left_lane_marker.header = header;
-    left_lane_marker.ns = "track_lanes";
+    left_lane_marker.ns = "lanes";
     left_lane_marker.id = 0;
     left_lane_marker.type = visualization_msgs::Marker::LINE_STRIP;
     left_lane_marker.action = visualization_msgs::Marker::ADD;
+    left_lane_marker.lifetime = ros::Duration(0.1);
     left_lane_marker.pose.orientation.w = 1.0;
-    left_lane_marker.scale.x = 0.15; // 선 두께
-    left_lane_marker.color.b = 1.0;
-    left_lane_marker.color.a = 1.0;
-    left_lane_marker.lifetime = ros::Duration(0.5);
+    left_lane_marker.scale.x = 0.1; // Line width
+    left_lane_marker.color.b = 1.0; // Blue color
+    left_lane_marker.color.a = 1.0; // Alpha (opacity)
 
-    for(const auto& pt : left_lane){
+    for (const auto& point : left_lane_points) {
         geometry_msgs::Point p;
-        p.x = pt.x(); p.y = pt.y(); p.z = 0.1; // 살짝 띄워서 표시
+        p.x = point.x();
+        p.y = point.y();
+        p.z = 0.0;
         left_lane_marker.points.push_back(p);
     }
     marker_array.markers.push_back(left_lane_marker);
 
-    // 오른쪽 차선 (노란색)
-    visualization_msgs::Marker right_lane_marker;
-    right_lane_marker.header = header;
-    right_lane_marker.ns = "track_lanes";
+    // --- Right Lane Marker (Yellow) ---
+    visualization_msgs::Marker right_lane_marker = left_lane_marker; // Copy properties
     right_lane_marker.id = 1;
-    right_lane_marker.type = visualization_msgs::Marker::LINE_STRIP;
-    right_lane_marker.action = visualization_msgs::Marker::ADD;
-    right_lane_marker.pose.orientation.w = 1.0;
-    right_lane_marker.scale.x = 0.15;
-    right_lane_marker.color.r = 1.0;
-    right_lane_marker.color.g = 1.0;
-    right_lane_marker.color.a = 1.0;
-    right_lane_marker.lifetime = ros::Duration(0.5);
+    right_lane_marker.color.b = 0.0; // Reset blue
+    right_lane_marker.color.r = 1.0; // Set red
+    right_lane_marker.color.g = 1.0; // Set green (R+G = Yellow)
+    right_lane_marker.points.clear(); // Clear points from the copied marker
 
-    for(const auto& pt : right_lane){
+    for (const auto& point : right_lane_points) {
         geometry_msgs::Point p;
-        p.x = pt.x(); p.y = pt.y(); p.z = 0.1;
+        p.x = point.x();
+        p.y = point.y();
+        p.z = 0.0;
         right_lane_marker.points.push_back(p);
     }
     marker_array.markers.push_back(right_lane_marker);
 
-    track_lanes_marker_pub_.publish(marker_array);
-    return;
+    // Publish the marker array
+    lane_marker_pub_.publish(marker_array);
 }
-
-//  출발선 시각화
-void FormulaAutonomousSystemNode::publishStartFinishLineMarker() {
-    auto stored_cones = formula_autonomous_system_->map_manager_->getStoredCones();
-    
-    std::vector<Cone> orange_cones;
-    for (const auto& cone : stored_cones) {
-        if (cone.color == "orange") {
-            orange_cones.push_back(cone);
-        }
-    }
-
-    if (orange_cones.size() < 2) {
-        return; // 콘이 2개 미만이면 마커를 표시하지 않음
-    }
-
-    // --- 주성분 분석(PCA)을 이용한 출발선 정보 계산 ---
-
-    // 1. Eigen 행렬에 콘 위치 데이터 채우기 (Nx2 행렬)
-    Eigen::MatrixXf points(orange_cones.size(), 2);
-    for (size_t i = 0; i < orange_cones.size(); ++i) {
-        points(i, 0) = orange_cones[i].center.x;
-        points(i, 1) = orange_cones[i].center.y;
-    }
-
-    // 2. 데이터의 중심(평균) 계산
-    Eigen::Vector2f centroid = points.colwise().mean();
-
-    // 3. 데이터를 중심으로 이동
-    points.rowwise() -= centroid.transpose();
-
-    // 4. 공분산 행렬 계산
-    Eigen::Matrix2f cov = points.transpose() * points / (points.rows() - 1);
-
-    // 5. 고유값과 고유벡터 계산
-    Eigen::SelfAdjointEigenSolver<Eigen::Matrix2f> eigensolver(cov);
-    Eigen::Vector2f principal_component = eigensolver.eigenvectors().col(1); // 가장 큰 고유값에 해당하는 고유벡터
-
-    // 6. 출발선의 각도, 길이, 중심점 계산
-    double angle = std::atan2(principal_component.y(), principal_component.x());
-    
-    // 모든 점을 주성분 벡터에 투영하여 길이 계산
-    Eigen::VectorXf projections = points * principal_component;
-    double length = projections.maxCoeff() - projections.minCoeff() + 0.5; // 콘 크기 고려
-
-    // --- 마커 생성 ---
-    lidar_msg_mutex_.lock();
-    std_msgs::Header header = lidar_msg_.header;
-    lidar_msg_mutex_.unlock();
-    header.frame_id = "map";
-
-    visualization_msgs::Marker start_line_marker;
-    start_line_marker.header = header;
-    start_line_marker.ns = "start_finish_line";
-    start_line_marker.id = 0;
-    start_line_marker.type = visualization_msgs::Marker::CUBE;
-    start_line_marker.action = visualization_msgs::Marker::ADD;
-    
-    start_line_marker.pose.position.x = centroid.x();
-    start_line_marker.pose.position.y = centroid.y();
-    start_line_marker.pose.position.z = 1.0;
-
-    tf2::Quaternion q;
-    q.setRPY(0, 0, angle);
-    start_line_marker.pose.orientation = tf2::toMsg(q);
-
-    start_line_marker.scale.x = length;
-    start_line_marker.scale.y = 0.1;
-    start_line_marker.scale.z = 2.0;
-
-    start_line_marker.color.r = 1.0;
-    start_line_marker.color.g = 0.5;
-    start_line_marker.color.b = 0.0;
-    start_line_marker.color.a = 0.5;
-    
-    start_line_marker.lifetime = ros::Duration();
-
-    start_finish_line_marker_pub_.publish(start_line_marker);
-    return;
-}
-
-//  lap counter
-void FormulaAutonomousSystemNode::publishLapCountMarker() {
-    visualization_msgs::MarkerArray marker_array;
-    visualization_msgs::Marker text_marker;
-
-    // RViz 화면 좌상단에 고정되도록 header 설정
-    text_marker.header.frame_id = "fsds/FSCar"; // 차량 좌표계에 고정
-    text_marker.header.stamp = ros::Time::now();
-    text_marker.ns = "lap_info";
-    text_marker.id = 0;
-    text_marker.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
-    text_marker.action = visualization_msgs::Marker::ADD;
-
-    // 화면 좌상단 근처에 위치하도록 설정 (차량 기준)
-    text_marker.pose.position.x = 2.0;
-    text_marker.pose.position.y = 3.0;
-    text_marker.pose.position.z = 2.0;
-    text_marker.pose.orientation.w = 1.0;
-
-    int lap_count = formula_autonomous_system_->getLapCount();
-    bool is_map_complete = (lap_count >= 1);
-
-    std::stringstream ss;
-    ss << "Lap: " << lap_count + 1 << "\n"; // 현재 진행중인 랩 표시
-    ss << "Mode: " << (is_map_complete ? "Racing" : "Mapping");
-    text_marker.text = ss.str();
-
-    text_marker.scale.z = 0.5; // 글자 크기
-
-    // 모드에 따라 글자 색 변경
-    if (is_map_complete) {
-        text_marker.color.r = 1.0; text_marker.color.g = 0.2; text_marker.color.b = 0.2; // 빨간색
-    } else {
-        text_marker.color.r = 0.2; text_marker.color.g = 1.0; text_marker.color.b = 0.2; // 녹색
-    }
-    text_marker.color.a = 1.0;
-
-    marker_array.markers.push_back(text_marker);
-    lap_count_marker_pub_.publish(marker_array);
-}
-
-//  ===========================================================================
 
 int main(int argc, char** argv){
     // Initialize ROS
@@ -660,4 +554,130 @@ int main(int argc, char** argv){
     ros::spin();
 
     return 0;
+}
+void FormulaAutonomousSystemNode::publishLapCountMarker(){
+    // 헤더 정보 가져오기
+    lidar_msg_mutex_.lock();
+    std_msgs::Header header = lidar_msg_.header;
+    lidar_msg_mutex_.unlock();
+    header.frame_id = "fsds/FSCar";
+
+    visualization_msgs::Marker marker;
+    marker.header = header;
+    marker.ns = "lap_count";
+    marker.id = 0;
+    marker.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
+    marker.action = visualization_msgs::Marker::ADD;
+    marker.lifetime = ros::Duration(0.1);
+    marker.scale.z = 1.0; // 텍스트 크기
+
+    // 텍스트 위치 (예: 차량 전방 상단)
+    marker.pose.position.x = 2.0;
+    marker.pose.position.y = 0.0;
+    marker.pose.position.z = 2.0;
+    marker.pose.orientation.w = 1.0;
+
+    // 텍스트 내용: 현재 랩 수
+    int current_lap = formula_autonomous_system_->getCurrentLap();
+    marker.text = "Lap: " + std::to_string(current_lap);
+
+    marker.color.a = 1.0;
+    marker.color.r = 1.0;
+    marker.color.g = 1.0;
+    marker.color.b = 1.0;
+
+    visualization_msgs::MarkerArray marker_array;
+    marker_array.markers.push_back(marker);
+    lap_count_marker_pub_.publish(marker_array);
+}
+void FormulaAutonomousSystemNode::publishGlobalPathMarker(){
+    // 헤더 정보 가져오기
+    lidar_msg_mutex_.lock();
+    std_msgs::Header header = lidar_msg_.header;
+    lidar_msg_mutex_.unlock();
+    header.frame_id = "map"; // 글로벌 맵은 "map" 프레임에 기반
+
+    visualization_msgs::Marker marker;
+    marker.header = header;
+    marker.ns = "global_path";
+    marker.id = 0;
+    marker.type = visualization_msgs::Marker::LINE_STRIP;
+    marker.action = visualization_msgs::Marker::ADD;
+    marker.lifetime = ros::Duration(0.1);
+    marker.pose.orientation.w = 1.0;
+    marker.scale.x = 0.2; // 라인 두께
+
+    // 글로벌 경로 데이터 가져오기
+    const auto& global_path = formula_autonomous_system_->getGlobalPath();
+
+    for(const auto& pt : global_path){
+        geometry_msgs::Point p;
+        p.x = pt.position.x();
+        p.y = pt.position.y();
+        p.z = 0.0;
+        marker.points.push_back(p);
+    }
+    
+    // 라인 색상 (예: 녹색)
+    marker.color.r = 0.0;
+    marker.color.g = 1.0;
+    marker.color.b = 0.0;
+    marker.color.a = 1.0;
+
+    // 경로가 비어있으면 마커를 제거
+    if (marker.points.empty()) {
+        marker.action = visualization_msgs::Marker::DELETE;
+    }
+
+    visualization_msgs::MarkerArray marker_array;
+    marker_array.markers.push_back(marker);
+    lane_marker_pub_.publish(marker_array);
+}
+void FormulaAutonomousSystemNode::publishFinishLineMarker(){
+    // 헤더 정보 가져오기
+    lidar_msg_mutex_.lock();
+    std_msgs::Header header = lidar_msg_.header;
+    lidar_msg_mutex_.unlock();
+    header.frame_id = "map"; // map 프레임 기반
+
+    // 피니시 라인 정보 가져오기
+    const Eigen::Vector2d& line_center = formula_autonomous_system_->getStartFinishLineCenter();
+    double line_yaw = formula_autonomous_system_->getStartFinishLineYaw();
+
+    // 라인 시각화 마커 생성
+    visualization_msgs::Marker line_marker;
+    line_marker.header = header;
+    line_marker.ns = "finish_line";
+    line_marker.id = 0;
+    line_marker.type = visualization_msgs::Marker::LINE_STRIP;
+    line_marker.action = visualization_msgs::Marker::ADD;
+    line_marker.lifetime = ros::Duration(0.1);
+    line_marker.pose.orientation.w = 1.0;
+    line_marker.scale.x = 0.5; // 라인 두께 (더 두껍게 하여 잘 보이게)
+
+    // 라인의 시작점과 끝점 계산 (예: 트랙 폭을 고려하여)
+    double line_half_length = 2.0; // 트랙 폭의 절반
+    geometry_msgs::Point start_point, end_point;
+
+    start_point.x = line_center.x() - line_half_length * sin(line_yaw);
+    start_point.y = line_center.y() + line_half_length * cos(line_yaw);
+    start_point.z = 0.0;
+    
+    end_point.x = line_center.x() + line_half_length * sin(line_yaw);
+    end_point.y = line_center.y() - line_half_length * cos(line_yaw);
+    end_point.z = 0.0;
+
+    line_marker.points.push_back(start_point);
+    line_marker.points.push_back(end_point);
+
+    // 라인 색상 (예: 빨간색)
+    line_marker.color.r = 1.0;
+    line_marker.color.g = 0.0;
+    line_marker.color.b = 0.0;
+    line_marker.color.a = 1.0;
+
+    // 마커 배열에 담아 발행
+    visualization_msgs::MarkerArray marker_array;
+    marker_array.markers.push_back(line_marker);
+    finish_line_marker_pub_.publish(marker_array);
 }
