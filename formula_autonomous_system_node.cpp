@@ -69,14 +69,15 @@ bool FormulaAutonomousSystemNode::init(){
     projected_cones_image_pub_ = nh_.advertise<sensor_msgs::Image>("/fsds/projected_cones_image", 1);
     center_line_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/center_line_marker", 1);
     lap_count_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lap_count_marker", 1);
-
+    lane_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lane_marker", 1);
+    
     // Get parameters
     pnh_.getParam("/system/main_loop_rate", main_loop_rate_);
 
     // Algorithms
     formula_autonomous_system_ = std::make_unique<FormulaAutonomousSystem>();
     formula_autonomous_system_->init(pnh_);
-    
+
     is_initialized_ = true;
     return true;
 }
@@ -91,7 +92,7 @@ void FormulaAutonomousSystemNode::run(){
     if(checkEssentialMessages() == false){
         return;
     }
-
+    
     // Get lidar point cloud
     lidar_msg_mutex_.lock();
     auto lidar_msg = lidar_msg_;
@@ -143,6 +144,7 @@ void FormulaAutonomousSystemNode::publish(){
     publishDetectedConesMarker();
     publishProjectedConesImage();
     publishCenterLineMarker();
+    publishLaneMarker();
     return;
 }
 
@@ -208,6 +210,7 @@ void FormulaAutonomousSystemNode::publishVehicleOdom(){
     odom.pose.pose.position.y = state[1];
     odom.pose.pose.position.z = 0.0;
     double yaw = state[2];
+    
     // Set rotation (orientation from yaw angle)
     tf2::Quaternion q;
     q.setRPY(0, 0, yaw);  // roll=0, pitch=0, yaw=pose[2]
@@ -255,7 +258,6 @@ void FormulaAutonomousSystemNode::publishNonGroundPointCloud(){
     non_ground_point_cloud_msg.header = header;
     non_ground_point_cloud_pub_.publish(non_ground_point_cloud_msg);
 
-    
     return;
 }
 
@@ -277,7 +279,6 @@ void FormulaAutonomousSystemNode::publishGroundPointCloud(){
 
 void FormulaAutonomousSystemNode::publishDetectedConesMarker(){
     // Publish
-
     // Get header
     lidar_msg_mutex_.lock();
     std_msgs::Header header = lidar_msg_.header;
@@ -340,7 +341,7 @@ void FormulaAutonomousSystemNode::publishProjectedConesImage(){
     cv_image.header = camera1_msg_.header;
     cv_image.encoding = sensor_msgs::image_encodings::BGR8;
     cv_image.image = formula_autonomous_system_->projected_cones_image_;
-    cv_image.toImageMsg(projected_cones_image_msg);
+    cv_image.toImageMsg(projected_cones_image_msg);  
     projected_cones_image_pub_.publish(projected_cones_image_msg);
     return;
 }
@@ -415,6 +416,63 @@ void FormulaAutonomousSystemNode::publishCenterLineMarker(){
     center_line_marker.markers.push_back(marker_line);
     center_line_marker_pub_.publish(center_line_marker);
     return;
+}
+
+void FormulaAutonomousSystemNode::publishLaneMarker() {
+    // Get header from a reliable source like lidar message
+    lidar_msg_mutex_.lock();
+    std_msgs::Header header = lidar_msg_.header;
+    lidar_msg_mutex_.unlock();
+    header.frame_id = "map"; // The frame should be the vehicle's base frame
+
+    visualization_msgs::MarkerArray marker_array;
+    
+    // Get the generated lane points from the core system
+    auto lanes = formula_autonomous_system_->getGlobalTrackLanes();
+    auto left_lane_points = lanes.first;
+    auto right_lane_points = lanes.second;
+
+    // --- Left Lane Marker (Blue) ---
+    visualization_msgs::Marker left_lane_marker;
+    left_lane_marker.header = header;
+    left_lane_marker.ns = "lanes";
+    left_lane_marker.id = 0;
+    left_lane_marker.type = visualization_msgs::Marker::LINE_STRIP;
+    left_lane_marker.action = visualization_msgs::Marker::ADD;
+    left_lane_marker.lifetime = ros::Duration(0.1);
+    left_lane_marker.pose.orientation.w = 1.0;
+    left_lane_marker.scale.x = 0.1; // Line width
+    left_lane_marker.color.b = 1.0; // Blue color
+    left_lane_marker.color.a = 1.0; // Alpha (opacity)
+
+    for (const auto& point : left_lane_points) {
+        geometry_msgs::Point p;
+        p.x = point.x();
+        p.y = point.y();
+        p.z = 0.0;
+        left_lane_marker.points.push_back(p);
+    }
+    marker_array.markers.push_back(left_lane_marker);
+
+    // --- Right Lane Marker (Yellow) ---
+    visualization_msgs::Marker right_lane_marker = left_lane_marker; // Copy properties
+    right_lane_marker.id = 1;
+    right_lane_marker.color.b = 0.0; // Reset blue
+    right_lane_marker.color.r = 1.0; // Set red
+    right_lane_marker.color.g = 1.0; // Set green (R+G = Yellow)
+    right_lane_marker.points.clear(); // Clear points from the copied marker
+
+    for (const auto& point : right_lane_points) {
+        geometry_msgs::Point p;
+        p.x = point.x();
+        p.y = point.y();
+        p.z = 0.0;
+        right_lane_marker.points.push_back(p);
+    }
+    marker_array.markers.push_back(right_lane_marker);
+
+    // Publish the marker array
+    lane_marker_pub_.publish(marker_array);
 }
 
 int main(int argc, char** argv){
