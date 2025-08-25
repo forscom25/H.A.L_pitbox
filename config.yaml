@@ -132,7 +132,7 @@ mapping:
 planning:
   trajectory:
     # Basic trajectory generation
-    lookahead_distance: 25.0
+    lookahead_distance: 20.0
     waypoint_spacing: 2.0
     default_speed: 3.0
     
@@ -171,14 +171,14 @@ control:
     max_steer_angle: 1.0
 
   Stanley:
-    k_gain: 0.5
+    k_gain: 0.7
 
   # PID Speed Control Parameters
   SpeedControl:
-    pid_kp: 0.4
+    pid_kp: 0.5
     pid_ki: 0.01
     pid_kd: 0.02
-    max_throttle: 0.4
+    max_throttle: 0.6
 
   Vehicle:
     wheel_base: 1.55
