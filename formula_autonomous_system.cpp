@@ -1095,7 +1095,7 @@ std::vector<Eigen::Vector2d> MapManager::sortConesByProximity(const std::vector<
 }
 void MapManager::generateLanesFromMemory() {
 
-    std::lock_guard<std::mutex> lock(cone_memory_mutex_);
+    //std::lock_guard<std::mutex> lock(cone_memory_mutex_);
     std::vector<Eigen::Vector2d> blue_cones, yellow_cones;
     
     for (const auto& cone : cone_memory_) {
@@ -1105,11 +1105,11 @@ void MapManager::generateLanesFromMemory() {
             yellow_cones.emplace_back(cone.center.x, cone.center.y);
         }
     }
-
+    ROS_INFO("GenerateLanes: Found %zu blue cones and %zu yellow cones.", blue_cones.size(), yellow_cones.size());
     // Sort cones by proximity
     auto sorted_blue = sortConesByProximity(blue_cones);
     auto sorted_yellow = sortConesByProximity(yellow_cones);
-
+    ROS_INFO("GenerateLanes: Sorted blue cones: %zu, Sorted yellow cones: %zu", sorted_blue.size(), sorted_yellow.size());
     // Generate spline for left lane (blue cones)
     left_lane_points_.clear();
     if (sorted_blue.size() >= 3) {
@@ -1120,9 +1120,12 @@ void MapManager::generateLanesFromMemory() {
 
         for (size_t i = 1; i < sorted_blue.size(); ++i) {
             double dist = std::hypot(sorted_blue[i].x() - sorted_blue[i-1].x(), sorted_blue[i].y() - sorted_blue[i-1].y());
+            if (dist < 1e-6) {
+                continue;
+            }
             double new_s = s_pts.back() + dist;
             if (new_s <= s_pts.back()) {
-                new_s = s_pts.back() + 0.01; // Ensure strictly increasing s values
+                new_s = s_pts.back() + 1e-6; // Ensure strictly increasing s values
             }
             s_pts.push_back(new_s);
             x_pts.push_back(sorted_blue[i].x());
@@ -1138,8 +1141,10 @@ void MapManager::generateLanesFromMemory() {
             left_lane_points_.emplace_back(spline_x(s), spline_y(s));
         }
         left_lane_points_.push_back(sorted_blue.back());
+        ROS_INFO("GenerateLanes: Left lane spline generated with %zu points.", left_lane_points_.size());
     } else {
         left_lane_points_ = sorted_blue; // Use raw points if not enough for spline
+        ROS_WARN("GenerateLanes: Not enough blue cones for spline. Using raw points: %zu", left_lane_points_.size());
     }
 
     // Generate spline for right lane (yellow cones)
@@ -1152,9 +1157,12 @@ void MapManager::generateLanesFromMemory() {
 
         for (size_t i = 1; i < sorted_yellow.size(); ++i) {
             double dist = std::hypot(sorted_yellow[i].x() - sorted_yellow[i-1].x(), sorted_yellow[i].y() - sorted_yellow[i-1].y());
+            if (dist < 1e-6) {
+                continue;
+            }
             double new_s = s_pts.back() + dist;
             if (new_s <= s_pts.back()) {
-                new_s = s_pts.back() + 0.01; // Ensure strictly increasing s values
+                new_s = s_pts.back() + 1e-6; // Ensure strictly increasing s values
             }
             s_pts.push_back(new_s);
             x_pts.push_back(sorted_yellow[i].x());
@@ -1170,8 +1178,10 @@ void MapManager::generateLanesFromMemory() {
             right_lane_points_.emplace_back(spline_x(s), spline_y(s));
         }
         right_lane_points_.push_back(sorted_yellow.back());
+        ROS_INFO("GenerateLanes: Right lane spline generated with %zu points.", right_lane_points_.size());
     } else {
         right_lane_points_ = sorted_yellow; // Use raw points if not enough for spline
+        ROS_WARN("GenerateLanes: Not enough yellow cones for spline. Using raw points: %zu", right_lane_points_.size());
     }
 }
 // unknown콘 보정 함수
@@ -1179,7 +1189,9 @@ void MapManager::refineConeMap() {
     std::lock_guard<std::mutex> lock(cone_memory_mutex_);
 
     // 1단계: 현재까지의 불완전한 맵으로 일단 차선을 생성 (기준선 역할)
+    ROS_INFO("RefineMap: Calling generateLanesFromMemory...");
     generateLanesFromMemory();
+    ROS_INFO("RefineMap: Finished generateLanesFromMemory. Left lane size: %zu, Right lane size: %zu", left_lane_points_.size(), right_lane_points_.size());
 
     // 양쪽 차선 중 하나라도 있어야 보정을 진행할 수 있음
     if (left_lane_points_.size() < 2 && right_lane_points_.size() < 2) {
@@ -1193,6 +1205,7 @@ void MapManager::refineConeMap() {
     const double max_dist_threshold = 2.5; 
 
     // 2단계: 메모리에 있는 모든 콘에 대해 반복
+    ROS_INFO("RefineMap: Starting cone refinement loop. Total cones in memory: %zu", cone_memory_.size());
     for (const auto& cone : cone_memory_) {
         // 이미 색상이 있는 콘은 그대로 새로운 메모리에 추가
         if (cone.color != "unknown") {
@@ -1221,6 +1234,7 @@ void MapManager::refineConeMap() {
             }
         }
 
+        ROS_INFO("RefineMap: Processing unknown cone at (%.2f, %.2f). Dist to left: %.2f, Dist to right: %.2f", cone_pos.x(), cone_pos.y(), min_dist_to_left_lane, min_dist_to_right_lane);
         // 5단계: ✨ 노이즈 필터링 및 색상 결정
         double closest_lane_dist = std::min(min_dist_to_left_lane, min_dist_to_right_lane);
 
@@ -2136,10 +2150,15 @@ void FormulaAutonomousSystem::setRacingStrategy(const VehicleState& vehicle_stat
         // 1랩 완료 (current_lap_이 2가 되었을 때) 시 글로벌 경로 생성 및 RACING 모드 전환
         if (current_lap_ > 1 && !is_global_path_generated_) {
             ROS_INFO("Lap 1 finished. Refining cone map and generating Global Path...");
-            
+            ROS_INFO("Starting map refinement...");
             map_manager_->refineConeMap(); // 1랩 완료 시 한 번만 맵 정제
+            ROS_INFO("Map refinement completed.");
+            ROS_INFO("Starting lane generation from memory...");
             map_manager_->generateLanesFromMemory(); // 정제된 맵으로 차선 다시 생성 (글로벌 경로 생성의 기반)
+            ROS_INFO("Lane generation from memory completed.");
+            ROS_INFO("Calling generateGlobalPath()...");     
             generateGlobalPath();           // 글로벌 경로 생성
+            ROS_INFO("generateGlobalPath() completed."); 
             is_global_path_generated_ = true;
             current_mode_ = DrivingMode::RACING; // RACING 모드로 전환
             ROS_INFO("Switched to RACING mode!");
@@ -2222,17 +2241,38 @@ void FormulaAutonomousSystem::generateGlobalPath() {
 
     // 1. 좌/우 차선을 기반으로 트랙의 중심선을 생성합니다.
     std::vector<Eigen::Vector2d> center_points;
-    // 여기서는 각 차선의 길이에 비례하여 두 차선 사이를 보간합니다.
-    // 점 개수가 다르거나 일치하지 않을 수 있으므로, 짧은 차선 기준으로 매칭합니다.
-    size_t min_lane_size = std::min(left_lane.size(), right_lane.size());
+    // ✨ 핵심 개선: 좌우 차선점 재매칭 로직
+    // 짧은 차선 기준으로 긴 차선의 가장 가까운 점을 찾아서 매칭
+    const auto* shorter_lane = &left_lane;
+    const auto* longer_lane = &right_lane;
+    if (right_lane.size() < left_lane.size()) {
+        shorter_lane = &right_lane;
+        longer_lane = &left_lane;
+    }
 
-    for (size_t i = 0; i < min_lane_size; ++i) {
-        Eigen::Vector2d mid_point = (left_lane[i] + right_lane[i]) * 0.5;
-        center_points.push_back(mid_point);
+    for (const auto& shorter_point : *shorter_lane) {
+        double min_dist_sq = std::numeric_limits<double>::max();
+        Eigen::Vector2d matched_longer_point;
+        bool found_match = false;
+
+        for (const auto& longer_point : *longer_lane) {
+            double dist_sq = (shorter_point - longer_point).squaredNorm();
+            if (dist_sq < min_dist_sq) {
+                min_dist_sq = dist_sq;
+                matched_longer_point = longer_point;
+                found_match = true;
+            }
+        }
+        
+        // 매칭되는 점이 있으면 중심점 생성
+        if (found_match) {
+            Eigen::Vector2d mid_point = (shorter_point + matched_longer_point) * 0.5;
+            center_points.push_back(mid_point);
+        }
     }
     
-    // (선택 사항) 만약 한쪽 차선이 더 길다면, 긴 차선의 남은 부분을 사용하여 중심선을 연장할 수도 있습니다.
-    // 하지만 여기서는 간단화를 위해 min_lane_size까지만 처리합니다.
+    // 이 로그를 추가하여 중심선 포인트의 개수를 확인합니다.
+    ROS_INFO("Generated center points: %zu", center_points.size());
 
 
     // 2. 생성된 중심선을 파라메트릭 스플라인으로 부드럽게 만듭니다.
@@ -2388,53 +2428,52 @@ void FormulaAutonomousSystem::defineStartFinishLine(const std::vector<Cone>& glo
  * @brief 차량이 시작/결승선을 통과했는지 확인하고 랩 카운트를 업데이트합니다.
  * @param current_state 현재 차량의 상태 (전역 좌표계)
  */
+// formula_autonomous_system.cpp
 void FormulaAutonomousSystem::updateLapCount(const VehicleState& current_state) {
-    if (!is_start_finish_line_defined_) return;
-
-    // 차량의 현재 위치와 시작/결승선 중심 간의 벡터
-    Eigen::Vector2d vehicle_to_line_center_vec = current_state.position - start_finish_line_center_;
-
-    // 차량의 현재 위치가 시작/결승선 라인 영역에 충분히 가까운지 확인
-    // 라인 영역의 폭을 planning_params_->max_x_separation_ (콘의 x축 오프셋 허용 범위)으로 사용
-    const double line_crossing_threshold_dist = planning_params_->max_x_separation_; 
-
-    if (vehicle_to_line_center_vec.norm() < line_crossing_threshold_dist) {
-        // 차량의 진행 방향(yaw)과 시작/결승선 방향(yaw)을 고려하여 통과 여부 판단
-        // 시작/결승선에 수직인 벡터와 차량의 진행 방향 벡터의 내적 사용
-        // start_finish_line_yaw_는 시작/결승선을 잇는 두 콘의 수직 방향임.
-        // 이 방향으로 차량이 이동하는 것을 '통과'로 간주
-        double line_normal_x = std::cos(start_finish_line_yaw_);
-        double line_normal_y = std::sin(start_finish_line_yaw_);
-        Eigen::Vector2d line_normal(line_normal_x, line_normal_y); // 시작/결승선 라인의 노멀 벡터
-
-        // 차량의 속도 벡터
-        // current_state.yaw는 차량의 헤딩, current_state.speed는 차량의 속도
-        Eigen::Vector2d vehicle_heading_vec(std::cos(current_state.yaw), std::sin(current_state.yaw));
-        
-        // 노멀 벡터와 차량 헤딩 벡터의 내적
-        double dot_product_with_line_normal = vehicle_heading_vec.dot(line_normal);
-
-        // dot_product가 양수이면 시작/결승선 노멀 방향으로 이동 중 (통과)
-        // just_crossed_line_ 플래그로 랩 카운트가 한 번만 증가하도록 제어
-        if (dot_product_with_line_normal > 0.2 && !just_crossed_line_) { // 내적 값이 일정 값(0.2) 이상일 때만 통과로 간주 (노이즈 방지)
-            current_lap_++;
-            just_crossed_line_ = true; // 통과 플래그 설정
-            ROS_INFO("FormulaAutonomousSystem: Lap %d started!", current_lap_);
-            
-            // 총 랩 수 초과 시 시스템 정지 또는 완료 처리
-            if (current_lap_ > planning_params_->total_laps_) {
-                ROS_INFO("FormulaAutonomousSystem: Total laps completed! Stopping system.");
-                // state_machine_->processEvent(ASEvent::SYSTEM_OFF); // 예시: 시스템 정지 이벤트 발생
-            }
-        } 
-        // 시작/결승선 영역 안에 있으면서, 반대 방향으로 이동 중이거나 멈춰있을 때 플래그 초기화
-        else if (dot_product_with_line_normal < -0.2 && just_crossed_line_) { // 반대 방향 통과 시 플래그 초기화
-            just_crossed_line_ = false;
-        }
-    } else {
-        // 시작/결승선 영역을 벗어났을 때 플래그 초기화
-        just_crossed_line_ = false;
+    if (!is_start_finish_line_defined_) {
+        // 결승선이 정의되지 않았을 경우, 이 로그가 반복적으로 출력됩니다.
+        ROS_INFO_THROTTLE(5.0, "Start/Finish line is not yet defined. Lap counting is on hold.");
+        return;
     }
+    
+    // 첫 실행 시 이전 위치를 현재 위치로 초기화
+    if (!is_initialized_){
+        previous_position_ = current_state.position;
+        is_initialized_ = true;
+        return;
+    }
+
+    // 통과 간 최소 시간 설정 (예: 5초)
+    const double min_crossing_interval_sec = 5.0; 
+    auto current_time = std::chrono::steady_clock::now();
+    std::chrono::duration<double> time_since_last_crossing = current_time - last_lap_crossing_time_;
+
+    // 1. 결승선 라인에 수직인 벡터(노멀 벡터) 계산
+    // defineStartFinishLine()에서 계산된 start_finish_line_yaw_를 그대로 사용
+    double line_normal_x = std::cos(start_finish_line_yaw_);
+    double line_normal_y = std::sin(start_finish_line_yaw_);
+    Eigen::Vector2d line_normal(line_normal_x, line_normal_y);
+
+    // 2. 현재 위치와 이전 위치의 결승선 라인에 대한 상대적 위치 계산
+    // (결승선 중심에서 차량 위치까지의 벡터와 노멀 벡터의 내적)
+    Eigen::Vector2d current_vec = current_state.position - start_finish_line_center_;
+    Eigen::Vector2d prev_vec = previous_position_ - start_finish_line_center_;
+
+    double current_dot_product = current_vec.dot(line_normal);
+    double prev_dot_product = prev_vec.dot(line_normal);
+
+    // 3. 랩 통과 감지: 내적값의 부호가 바뀌었는지 확인 (라디오가 라인을 넘었음을 의미)
+    if ((current_dot_product * prev_dot_product < 0) && (current_dot_product > 0) && (prev_dot_product < 0)) {
+        // 정방향(앞으로) 통과했을 때만 랩 카운트
+        if (time_since_last_crossing.count() > min_crossing_interval_sec) {
+            current_lap_++;
+            ROS_INFO("FormulaAutonomousSystem: Lap %d started!", current_lap_);
+            last_lap_crossing_time_ = current_time;
+        }
+    }
+    
+    // 현재 위치를 이전 위치로 업데이트
+    previous_position_ = current_state.position;
 }
 /*void FormulaAutonomousSystem::setRacingStrategy(const VehicleState& vehicle_state, const std::vector<Cone>& cones_for_planning) {
     // 1. Lap Counting & Mode Switching Logic
