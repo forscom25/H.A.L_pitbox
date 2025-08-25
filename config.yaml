@@ -6,13 +6,14 @@
 system:
   main_loop_rate: 1000.0 # [Hz]
 
+# ===========================================
+# Perception Parameters
+# ===========================================
 perception:
-  # ===========================================
-  # LiDAR Perception Parameters
-  # ===========================================
+  # ========== LiDAR Parameters ============
   
+  # LiDAR ROI extraction parameters
   lidar_roi_extraction:
-    # LiDAR ROI extraction parameters
     x_min: 0.0
     x_max: 60.0
     y_min: -30.0
@@ -20,24 +21,24 @@ perception:
     z_min: -10.0
     z_max: 10.0
 
+  # RANSAC ground plane fitting parameters
   lidar_ground_removal:
-    # RANSAC ground plane fitting parameters
     ransac_iterations: 30
     ransac_distance_threshold: 0.01
 
+  # DBSCAN clustering parameters
   lidar_clustering:
-    # DBSCAN clustering parameters
     dbscan_eps: 0.5
     dbscan_min_points: 2
 
+  # Cone geometric constraints
   lidar_cone_detection:
-    # Cone geometric constraints
     cone_min_radius: 0.00
     cone_max_radius: 0.7
     cone_min_points: 1
 
+  # LiDAR position relative to vehicle base (meters, degrees)
   lidar_extrinsics:
-    # LiDAR position relative to vehicle base (meters, degrees)
     translation_x: 0.6
     translation_y: 0.0
     translation_z: 0.1
@@ -45,20 +46,18 @@ perception:
     rotation_pitch: 0.0
     rotation_yaw: 0.0
 
-  # ===========================================
-  # Camera Parameters
-  # ===========================================
+  # ========= Camera Parameters ============
 
+  # Camera intrinsic parameters (pixels)
   camera_intrinsics:
-    # Camera intrinsic parameters (pixels)
     # 640x480, horizontal FOV: 90 deg: focal length = 320.0
     focal_length_x: 320.0
     focal_length_y: 320.0
     principal_point_x: 320.0
     principal_point_y: 240.0
 
+  # Camera 1 (Left) position relative to vehicle base (meters, degrees)
   camera1_extrinsics:
-    # Camera 1 (Left) position relative to vehicle base (meters, degrees)
     translation_x: -0.43
     translation_y: 0.15
     translation_z: 0.82
@@ -66,8 +65,8 @@ perception:
     rotation_pitch: 0.0
     rotation_yaw: 0.0
 
+  # Camera 2 (Right) position relative to vehicle base (meters, degrees)
   camera2_extrinsics:
-    # Camera 2 (Right) position relative to vehicle base (meters, degrees)
     translation_x: -0.43
     translation_y: -0.15
     translation_z: 0.82
@@ -75,8 +74,8 @@ perception:
     rotation_pitch: 0.0
     rotation_yaw: 0.0
 
+  # Image preprocessing settings
   camera_image_processing:
-    # Image preprocessing settings
     enable_preprocessing: false
     gaussian_blur_sigma: 1.0
     bilateral_filter_diameter: 9
@@ -84,27 +83,30 @@ perception:
   camera_hsv_window_size:
     window_size: 20
 
+  # HSV thresholds for yellow cone detection
   camera_hsv_yellow:
-    # HSV thresholds for yellow cone detection
     hue_min: 18
     hue_max: 40
     saturation_min: 36
     value_min: 100
 
+  # HSV thresholds for blue cone detection
   camera_hsv_blue:
-    # HSV thresholds for blue cone detection
     hue_min: 95
     hue_max: 110
     saturation_min: 90
     value_min: 100
 
+  # HSV thresholds for orange cone detection
   camera_hsv_orange:
-    # HSV thresholds for orange cone detection
     hue_min: 10
     hue_max: 15
     saturation_min: 100
     value_min: 100
 
+# ===========================================
+# Localization Parameters
+# ===========================================
 localization:
   # Reference WGS84 Position
   # if user defined position is true then use ref_wgs84_latitude, ref_wgs84_longitude, ref_wgs84_altitude
@@ -117,36 +119,48 @@ localization:
   # Velocity Estimation
   gps_correction_gain: 0.1
 
-behavior_planning:
-  default: {}
+# ===========================================
+# Mapping Parameters
+# ===========================================
+mapping:
+  cone_memory_search_radius: 10.0
+  cone_memory_association_threshold: 1.0
 
-local_planning:
+# ===========================================
+# Planning Parameters
+# ===========================================
+planning:
   trajectory:
     # Basic trajectory generation
     lookahead_distance: 20.0
-    waypoint_spacing: 0.5
+    waypoint_spacing: 2.0
     default_speed: 3.0
     
     # Cone-based path planning (meters)
-    max_cone_distance: 200
+    max_cone_distance: 25.0
     lane_offset: 2.0
     
     # Safety parameters (meters)
     safety_margin: 0.5
-
-    # Cone memory parameters (meters)
-    cone_memory_search_radius: 10.0z`
-    cone_memory_association_threshold: 1.0
 
     # Curvature-based speed planning
     max_speed: 3.0
     min_speed: 1.0
     curvature_gain: 5.0
 
-    # Lap 2+ (Racing Mode) speed planning
-    racing_max_speed: 5.0 # 레이싱 모드 최고 속도
-    racing_min_speed: 2.0 # 레이싱 모드 최저 속도
+  behavior:
+    # Lap Counting & Race Logic
+    # total laps based on KSAE FSD rules
+    # total_laps includes the mapping lap (e.g. 10 laps = 1 mapping lap + 9 racing laps)
+    total_laps: 10 # [laps]
 
+    # Dynamic Start/Finish Line Detection (meters)
+    min_y_separation: 5.0  # track width
+    max_x_separation: 2.0  # cone offset
+
+# ===========================================
+# Control Parameters
+# ===========================================
 control:
   ControllerSelection:
     # lateral_controller_type: "PurePursuit", "Stanley"
@@ -159,14 +173,12 @@ control:
   Stanley:
     k_gain: 0.7
 
+  # PID Speed Control Parameters
   SpeedControl:
-    # ===============================================
-    # PID Speed Control Parameters
-    # ===============================================
     pid_kp: 0.5
     pid_ki: 0.01
     pid_kd: 0.02
-    max_throttle: 0.25
-    steering_based_speed_gain: 2.0
+    max_throttle: 0.6
+
   Vehicle:
     wheel_base: 1.55
