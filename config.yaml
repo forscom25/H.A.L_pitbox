@@ -132,7 +132,7 @@ mapping:
 planning:
   trajectory:
     # Basic trajectory generation
-    lookahead_distance: 20.0
+    lookahead_distance: 25.0
     waypoint_spacing: 2.0
     default_speed: 3.0
     
@@ -155,8 +155,8 @@ planning:
     total_laps: 10 # [laps]
 
     # Dynamic Start/Finish Line Detection (meters)
-    min_y_separation: 5.0  # track width
-    max_x_separation: 2.0  # cone offset
+    min_y_separation: 4.0  # track width
+    max_x_separation: 1.0  # cone offset
 
 # ===========================================
 # Control Parameters
@@ -171,14 +171,14 @@ control:
     max_steer_angle: 1.0
 
   Stanley:
-    k_gain: 0.7
+    k_gain: 0.5
 
   # PID Speed Control Parameters
   SpeedControl:
-    pid_kp: 0.5
+    pid_kp: 0.4
     pid_ki: 0.01
     pid_kd: 0.02
-    max_throttle: 0.6
+    max_throttle: 0.4
 
   Vehicle:
     wheel_base: 1.55
