@@ -2429,14 +2429,13 @@ void FormulaAutonomousSystem::defineStartFinishLine(const std::vector<Cone>& glo
  * @param current_state 현재 차량의 상태 (전역 좌표계)
  */
 // formula_autonomous_system.cpp
+// formula_autonomous_system.cpp
 void FormulaAutonomousSystem::updateLapCount(const VehicleState& current_state) {
     if (!is_start_finish_line_defined_) {
-        // 결승선이 정의되지 않았을 경우, 이 로그가 반복적으로 출력됩니다.
         ROS_INFO_THROTTLE(5.0, "Start/Finish line is not yet defined. Lap counting is on hold.");
         return;
     }
     
-    // 첫 실행 시 이전 위치를 현재 위치로 초기화
     if (!is_initialized_){
         previous_position_ = current_state.position;
         is_initialized_ = true;
@@ -2448,27 +2447,38 @@ void FormulaAutonomousSystem::updateLapCount(const VehicleState& current_state) 
     auto current_time = std::chrono::steady_clock::now();
     std::chrono::duration<double> time_since_last_crossing = current_time - last_lap_crossing_time_;
 
+    // 결승선 통과 감지 거리 설정
+    const double line_crossing_threshold_dist = planning_params_->max_x_separation_ * 2.0;
+
     // 1. 결승선 라인에 수직인 벡터(노멀 벡터) 계산
-    // defineStartFinishLine()에서 계산된 start_finish_line_yaw_를 그대로 사용
     double line_normal_x = std::cos(start_finish_line_yaw_);
     double line_normal_y = std::sin(start_finish_line_yaw_);
     Eigen::Vector2d line_normal(line_normal_x, line_normal_y);
 
     // 2. 현재 위치와 이전 위치의 결승선 라인에 대한 상대적 위치 계산
-    // (결승선 중심에서 차량 위치까지의 벡터와 노멀 벡터의 내적)
     Eigen::Vector2d current_vec = current_state.position - start_finish_line_center_;
     Eigen::Vector2d prev_vec = previous_position_ - start_finish_line_center_;
 
     double current_dot_product = current_vec.dot(line_normal);
     double prev_dot_product = prev_vec.dot(line_normal);
 
-    // 3. 랩 통과 감지: 내적값의 부호가 바뀌었는지 확인 (라디오가 라인을 넘었음을 의미)
-    if ((current_dot_product * prev_dot_product < 0) && (current_dot_product > 0) && (prev_dot_product < 0)) {
-        // 정방향(앞으로) 통과했을 때만 랩 카운트
-        if (time_since_last_crossing.count() > min_crossing_interval_sec) {
-            current_lap_++;
-            ROS_INFO("FormulaAutonomousSystem: Lap %d started!", current_lap_);
-            last_lap_crossing_time_ = current_time;
+    // 차량의 속도 벡터와 결승선 노멀 벡터의 내적을 계산하여 
+    // 차량이 결승선에 대해 '정방향'으로 이동 중인지 확인
+    Eigen::Vector2d velocity_vector(std::cos(current_state.yaw), std::sin(current_state.yaw));
+    double velocity_dot_product = velocity_vector.dot(line_normal);
+
+
+    // 3. 랩 통과 감지: 내적값의 부호가 바뀌었는지 확인 (라인을 넘었음을 의미)
+    // ✨ 핵심 개선: 추가된 거리 조건
+    if (current_vec.norm() < line_crossing_threshold_dist) {
+        if ((current_dot_product > 0 && prev_dot_product < 0)) {
+            if (time_since_last_crossing.count() > min_crossing_interval_sec && velocity_dot_product > 0.1) {
+                current_lap_++;
+                ROS_INFO("FormulaAutonomousSystem: Lap %d started!", current_lap_);
+                last_lap_crossing_time_ = current_time;
+            } else {
+                ROS_INFO("FormulaAutonomousSystem: Lap crossing detected, but min time interval or velocity check failed. Last crossing: %.2f sec ago, Velocity dot: %.2f", time_since_last_crossing.count(), velocity_dot_product);
+            }
         }
     }
     
