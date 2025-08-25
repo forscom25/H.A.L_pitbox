@@ -631,7 +631,7 @@ void FormulaAutonomousSystemNode::publishGlobalPathMarker(){
 
     visualization_msgs::MarkerArray marker_array;
     marker_array.markers.push_back(marker);
-    lane_marker_pub_.publish(marker_array);
+    global_path_marker_pub_.publish(marker_array);
 }
 void FormulaAutonomousSystemNode::publishFinishLineMarker(){
     // 헤더 정보 가져오기
