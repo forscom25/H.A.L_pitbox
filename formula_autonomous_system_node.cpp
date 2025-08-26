@@ -69,6 +69,7 @@ bool FormulaAutonomousSystemNode::init(){
     projected_cones_image_pub_ = nh_.advertise<sensor_msgs::Image>("/fsds/projected_cones_image", 1);
     center_line_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/center_line_marker", 1);
     lap_count_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lap_count_marker", 1);
+    global_cones_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/global_cones_marker", 1);
     lane_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lane_marker", 1);
     
     // Get parameters
@@ -144,6 +145,7 @@ void FormulaAutonomousSystemNode::publish(){
     publishDetectedConesMarker();
     publishProjectedConesImage();
     publishCenterLineMarker();
+    publishGlobalConesMarker();
     publishLaneMarker();
     return;
 }
@@ -344,6 +346,61 @@ void FormulaAutonomousSystemNode::publishProjectedConesImage(){
     cv_image.toImageMsg(projected_cones_image_msg);  
     projected_cones_image_pub_.publish(projected_cones_image_msg);
     return;
+}
+
+void FormulaAutonomousSystemNode::publishGlobalConesMarker() {
+    std_msgs::Header header;
+    imu_msg_mutex_.lock();
+    header.stamp = imu_msg_.header.stamp;
+    imu_msg_mutex_.unlock();
+    header.frame_id = "map"; // 전역 좌표계인 "map" 프레임 기준
+
+    visualization_msgs::MarkerArray marker_array;
+
+    // MapManager에 저장된 전역 콘 데이터를 가져옵니다.
+    std::vector<Cone> global_cones = formula_autonomous_system_->getGlobalConeMap();
+
+    int id = 0;
+    for (const auto& cone : global_cones) {
+        visualization_msgs::Marker marker;
+        marker.header = header;
+        marker.ns = "global_cones";
+        marker.id = id++;
+        marker.type = visualization_msgs::Marker::CYLINDER;
+        marker.action = visualization_msgs::Marker::ADD;
+        marker.lifetime = ros::Duration(0.2); // 0.2초 동안 유지
+
+        // Use global coordinate
+        marker.pose.position.x = cone.center.x;
+        marker.pose.position.y = cone.center.y;
+        marker.pose.position.z = cone.center.z;
+        marker.pose.orientation.w = 1.0;
+
+        // Cone size
+        marker.scale.x = 0.3;
+        marker.scale.y = 0.3;
+        marker.scale.z = 0.3;
+
+        // Cone color
+        if (cone.color == "yellow") {
+            marker.color.r = 1.0;
+            marker.color.g = 1.0;
+        } else if (cone.color == "blue") {
+            marker.color.b = 1.0;
+        } else if (cone.color == "orange") {
+            marker.color.r = 1.0;
+            marker.color.g = 0.5;
+        } else { // unknown
+            marker.color.r = 0.5;
+            marker.color.g = 0.5;
+            marker.color.b = 0.5;
+        }
+        marker.color.a = 1.0; // 불투명
+
+        marker_array.markers.push_back(marker);
+    }
+
+    global_cones_marker_pub_.publish(marker_array);
 }
 
 void FormulaAutonomousSystemNode::publishCenterLineMarker(){
