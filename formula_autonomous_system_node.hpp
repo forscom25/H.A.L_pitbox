@@ -135,8 +135,11 @@ public: // Function components
     void publishDetectedConesMarker();
     void publishProjectedConesImage();
     void publishCenterLineMarker();
+    void publishGlobalConesMarker();
     void publishLaneMarker();
-    
+    void publishStartFinishLineMarker();
+    void publishGlobalPathMarker();                  // Globalpath
+    void publishTrajectoryFromGlobalPathMarker();    // TrajectoryFromGlobalpath
 
 // Variables
 private:
@@ -189,7 +192,10 @@ public: // ROS
     ros::Publisher projected_cones_image_pub_;
     ros::Publisher center_line_marker_pub_;
     ros::Publisher lap_count_marker_pub_;
+    ros::Publisher global_cones_marker_pub_;
     ros::Publisher lane_marker_pub_;
+    ros::Publisher global_path_marker_pub_;         // Globalpath
+    ros::Publisher trajectory_from_global_path_marker_pub_;    // TrajectoryFromGlobalpath
 
     // Output messages
     fs_msgs::ControlCommand control_command_msg_;
