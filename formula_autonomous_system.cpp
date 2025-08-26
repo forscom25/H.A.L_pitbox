@@ -1032,6 +1032,9 @@ std::vector<Eigen::Vector2d> MapManager::sortConesByProximity(const std::vector<
     std::vector<Eigen::Vector2d> sorted_cones;
     std::vector<Eigen::Vector2d> remaining_cones = cones;
 
+    const double max_connection_distance = params_->max_connection_distance_;
+    const double direction_weight = params_->direction_weight_;
+
     // Start from the cone with the smallest x coordinate (closest to the vehicle)
     auto start_it = std::min_element(remaining_cones.begin(), remaining_cones.end(),
         [](const Eigen::Vector2d& a, const Eigen::Vector2d& b) {
@@ -1040,25 +1043,55 @@ std::vector<Eigen::Vector2d> MapManager::sortConesByProximity(const std::vector<
 
     sorted_cones.push_back(*start_it);
     remaining_cones.erase(start_it);
+
+    // Vehicle heading(x) as initial direction
+    Eigen::Vector2d current_direction(1.0, 0.0);
     
     // Repeat until all cones are sorted
     while (!remaining_cones.empty()) {
 
         Eigen::Vector2d current_point = sorted_cones.back();
-        double min_dist_sq = std::numeric_limits<double>::max();
-        auto closest_it = remaining_cones.begin();
+        
+        // Update direction vector
+        if (sorted_cones.size() > 1) {
+            current_direction = (sorted_cones.back() - sorted_cones[sorted_cones.size() - 2]).normalized();
+        }
+
+        double best_score = std::numeric_limits<double>::max();
+        auto best_it = remaining_cones.begin();
 
         for (auto it = remaining_cones.begin(); it != remaining_cones.end(); ++it) {
-            double dist_sq = (it->x() - current_point.x()) * (it->x() - current_point.x()) +
+            double dist = (it->x() - current_point.x()) * (it->x() - current_point.x()) +
                              (it->y() - current_point.y()) * (it->y() - current_point.y());
-            if (dist_sq < min_dist_sq) {
-                min_dist_sq = dist_sq;
-                closest_it = it;
+            dist = std::sqrt(dist);
+
+            // noise filter
+            if (dist > max_connection_distance) {
+                continue;
+            }
+
+            // Cost function based on direction vectors
+            Eigen::Vector2d candidate_direction = (*it - current_point).normalized();
+            double dot_product = current_direction.dot(candidate_direction); // scalar product of two direction vector (correlation)
+
+            // Cost function(lower the better)
+            double score = dist * (1.0 + direction_weight * (1.0 - dot_product));
+
+            if (score < best_score) {
+                best_score = score;
+                best_it = it;
             }
         }
-        sorted_cones.push_back(*closest_it);
-        remaining_cones.erase(closest_it);
+
+
+        if (best_score == std::numeric_limits<double>::max()) {
+            break;
+        }
+
+        sorted_cones.push_back(*best_it);
+        remaining_cones.erase(best_it);
     }
+
     return sorted_cones;
 }
 
@@ -1144,6 +1177,92 @@ void MapManager::generateLanesFromMemory() {
     }
 }
 
+/**
+ * @brief Iterates through the cone memory to infer the color of 'unknown' cones
+ * and removes cones that are far from the generated lanes, considering them as noise.
+ * @details 1. Generates temporary lanes from the current map.
+ * 2. For each 'unknown' cone, calculates its distance to the lanes.
+ * 3. If close, assigns the color of the nearest lane; if far, discards it as noise.
+ * 4. Replaces the old map with the refined map.
+ */
+
+void MapManager::refineConeMap() {
+    std::lock_guard<std::mutex> lock(cone_memory_mutex_);
+
+    // 1. Generate temporary lanes from current map (guideline)
+    generateLanesFromMemory();
+
+    // Check sufficiency
+    if (left_lane_points_.size() < 2 && right_lane_points_.size() < 2) {
+        ROS_WARN("MapManager: Not enough lane points to refine cone map. Skipping.");
+        return;
+    }
+
+    // New memory vector for refined cone data
+    std::vector<Cone> refined_cone_memory;
+    const double max_dist_threshold = params_->max_dist_from_lane_; 
+
+    // 2. Classification of every cone data
+    for (const auto& cone : cone_memory_) {
+        // Already classified
+        if (cone.color != "unknown") {
+            refined_cone_memory.push_back(cone);
+            continue;
+        }
+
+        // Verify and correct the unknowns
+        Eigen::Vector2d cone_pos(cone.center.x, cone.center.y);
+        double min_dist_to_left_lane = std::numeric_limits<double>::max();
+        double min_dist_to_right_lane = std::numeric_limits<double>::max();
+
+        // 3. Calculate minimum distance from left(blue) lane
+        if (left_lane_points_.size() >= 2) {
+            for (size_t i = 0; i < left_lane_points_.size() - 1; ++i) {
+                double dist = pointToLineSegmentDistance(cone_pos, left_lane_points_[i], left_lane_points_[i + 1]);
+                min_dist_to_left_lane = std::min(dist, min_dist_to_left_lane);
+            }
+        }
+
+        // 4. Calculate minimum distance from right(yellow) lane
+        if (right_lane_points_.size() >= 2) {
+            for (size_t i = 0; i < right_lane_points_.size() - 1; ++i) {
+                double dist = pointToLineSegmentDistance(cone_pos, right_lane_points_[i], right_lane_points_[i + 1]);
+                min_dist_to_right_lane = std::min(dist, min_dist_to_right_lane);
+            }
+        }
+
+        // 5. Filter noise and decide color
+        double closest_lane_dist = std::min(min_dist_to_left_lane, min_dist_to_right_lane);
+
+        if (closest_lane_dist < max_dist_threshold) {// noise filter
+            
+            Cone refined_cone = cone;
+            if (min_dist_to_left_lane < min_dist_to_right_lane) {
+                refined_cone.color = "blue";
+            } else {
+                refined_cone.color = "yellow";
+            }
+            refined_cone_memory.push_back(refined_cone);
+        } else {
+            // 차선과 너무 멀리 떨어져 있다면, 노이즈로 판단하고 맵에서 제거 (새로운 메모리에 추가하지 않음)
+            ROS_DEBUG("MapManager: Discarding a noisy object far from lanes at (%.2f, %.2f)", cone.center.x, cone.center.y);
+        }
+    }
+
+    // 6. Update the global cone map
+    cone_memory_ = refined_cone_memory;
+
+    ROS_INFO("MapManager: Cone map refinement complete. Total cones: %zu", cone_memory_.size());
+}
+
+// 헬퍼 함수: 점과 선분 사이의 최단 거리 계산
+double MapManager::pointToLineSegmentDistance(const Eigen::Vector2d& p, const Eigen::Vector2d& v, const Eigen::Vector2d& w) {
+    double l2 = (v - w).squaredNorm();
+    if (l2 == 0.0) return (p - v).norm();
+    double t = std::max(0.0, std::min(1.0, (p - v).dot(w - v) / l2));
+    Eigen::Vector2d projection = v + t * (w - v);
+    return (p - projection).norm();
+}
 
 // =================================================================================================
 // ========================================== 4. Planning ==========================================
@@ -1355,7 +1474,7 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(const std::
 
     // Filter cones based on color and position
     for (const auto& cone : cones) {
-        if (cone.center.x > 0.0) { // Only consider cones in front of the vehicle
+        if (cone.center.x > 0.1) { // Only consider cones in front of the vehicle
             if (cone.color == "blue") {
                 blue_cones_local.push_back(Eigen::Vector2d(cone.center.x, cone.center.y));
             } else if (cone.color == "yellow") {
@@ -1415,47 +1534,78 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(const std::
         } else if (closest_yellow) {
             waypoint.y() = closest_yellow->y() + params_->lane_offset_;
 
+        // Extrapolation logic
+        } else if (path_points.size() >= 2) {
+
+            // Predict future trajectory based on trajectory history
+            Eigen::Vector2d last_point = path_points.back();
+            Eigen::Vector2d prev_point = path_points[path_points.size() - 2];
+
+            double dx = last_point.x() - prev_point.x();
+            double dy = last_point.y() - prev_point.y();
+           
+            if (std::abs(dx) > 1e-6) { // prevent 0 division
+                double slope = dy / dx;
+                // 마지막 점에서 동일한 기울기로 연장하여 y좌표 예측
+                waypoint.y() = last_point.y() + slope * (target_x - last_point.x());
+            } else {
+                // 수직에 가까운 경우, 이전 y값을 그대로 사용
+                waypoint.y() = last_point.y();
+            }
+
         } else if (!path_points.empty()) {
+            // 경로점이 하나만 있을 경우, 이전 y값을 그대로 사용 (직진)
             waypoint.y() = path_points.back().y();
         }
+
         path_points.push_back(waypoint);
     }
-    
-    // Generate trajectory points from the path
+
+    // Use Parametric Spline
     if (path_points.size() >= 2) {
 
-        std::vector<double> x_pts, y_pts;
+        std::vector<double> s_pts, x_pts, y_pts;
 
-        for (const auto& pt : path_points) {
-            x_pts.push_back(pt.x());
-            y_pts.push_back(pt.y());
+        s_pts.push_back(0.0); // 0 accumalated distance at the start
+        x_pts.push_back(path_points[0].x());
+        y_pts.push_back(path_points[0].y());
+
+        // 각 경로점까지의 누적 거리(s)를 계산
+        for (size_t i = 1; i < path_points.size(); ++i) {
+
+            double dist = (path_points[i] - path_points[i - 1]).norm();
+
+            s_pts.push_back(s_pts.back() + dist);
+            x_pts.push_back(path_points[i].x());
+            y_pts.push_back(path_points[i].y());
         }
-        
-        for (size_t i = 1; i < x_pts.size(); ++i) {
-            if (x_pts[i] <= x_pts[i-1]) {
-                x_pts[i] = x_pts[i-1] + 0.01;
-            }
-        }
 
-        tk::spline s;
-        s.set_points(x_pts, y_pts);
+        // x와 y를 각각의 스플라인으로 생성 (x = fx(s), y = fy(s))
+        tk::spline spline_x, spline_y;
+        spline_x.set_points(s_pts, x_pts);
+        spline_y.set_points(s_pts, y_pts);
 
-        for (double current_dist = 0; current_dist < params_->lookahead_distance_; current_dist += 0.5) {
-            double x = current_dist;
-            double y = s(x);
-            double x_next = x + 0.01;
-            double y_next = s(x_next);
-            double yaw = std::atan2(y_next - y, x_next - x);
-            double curvature = calculateCurvature(s, x);
+        // Generate trajectory points from the path
+        double total_length = s_pts.back();
+        for (double s = 0; s < total_length; s += 0.5) { // 0.5m 간격으로 점 생성
+            double x = spline_x(s);
+            double y = spline_y(s);
 
-            // Adjust speed based on curvature
+            // 1차 미분값을 이용해 경로의 접선 각도(yaw) 계산
+            double dx = spline_x.deriv(1, s);
+            double dy = spline_y.deriv(1, s);
+            double yaw = std::atan2(dy, dx);
+
+            // 1차, 2차 미분값을 이용해 곡률(curvature) 계산
+            double ddx = spline_x.deriv(2, s);
+            double ddy = spline_y.deriv(2, s);
+            double curvature = std::abs(dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
+
+            // 곡률 기반 속도 계획
             double desired_speed = params_->max_speed_ / (1.0 + params_->curvature_gain_ * std::abs(curvature));
-
-            // Clamp speed to min and max limits
             double target_speed = std::max(params_->min_speed_, std::min(desired_speed, params_->max_speed_));
 
-            // Add trajectory point
-            last_trajectory_.emplace_back(x, y, yaw, curvature, target_speed, current_dist);
+            last_trajectory_.emplace_back(x, y, yaw, curvature, target_speed, s);
         }
     }
     
@@ -1890,7 +2040,18 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     double steering_angle = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_);
 
     // 2. 종방향 제어: 목표 속도와 현재 속도를 기반으로 스로틀 계산
-    double throttle = longitudinal_controller_->calculate(trajectory_points_[0].speed, vehicle_state.speed);
+    // 2-1. (기본 속도) 곡률 기반으로 계산된 경로의 목표 속도를 가져옴
+    double base_target_speed = trajectory_points_[0].speed;
+
+    // 2-2. (실시간 보정) 계산된 스티어링 각도에 비례하여 목표 속도를 추가로 감속
+    double steering_dampening = std::abs(steering_angle) * control_params_->steering_based_speed_gain_;
+    double final_target_speed = base_target_speed - steering_dampening;
+
+    // 2-3. 최종 목표 속도가 planning_params_의 최소 속도보다 낮아지지 않도록 제한
+    final_target_speed = std::max(planning_params_->min_speed_, final_target_speed);
+
+    // 2-4. 최종 목표 속도를 바탕으로 PID 제어기를 통해 스로틀 계산
+    double throttle = longitudinal_controller_->calculate(final_target_speed, vehicle_state.speed);
 
     // 3. 계산된 제어 명령을 멤버 변수에 저장
     control_command_msg.steering = -steering_angle; // FSDS 좌표계에 맞게 음수(-) 적용
