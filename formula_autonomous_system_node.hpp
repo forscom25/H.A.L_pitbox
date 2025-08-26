@@ -4,6 +4,7 @@
  * @brief 
  * @version 0.1
  * @date 2025-07-21
+ * 
  * @copyright Copyright (c) 2025
  */
 
@@ -91,7 +92,7 @@ public: // Function components
 
     bool checkEssentialMessages();
 
-public: // ROS
+    public: // ROS
     // Callback functions
 
     // mutex for message synchronization, able to handle multiple messages
@@ -134,17 +135,16 @@ public: // ROS
     void publishDetectedConesMarker();
     void publishProjectedConesImage();
     void publishCenterLineMarker();
+    void publishGlobalConesMarker();
     void publishLaneMarker();
-    void publishLapCountMarker();
-    void publishGlobalPathMarker();
-    void publishFinishLineMarker();
+    void publishGlobalPathMarker(); // 추가
+    void publishFinishLineMarker(); // 추가
 
 // Variables
 private:
     bool is_initialized_;
     double main_loop_rate_;
-    bool is_ready_to_publish_;
-
+    
 public: // ROS
     ros::NodeHandle nh_;
     ros::NodeHandle pnh_;
@@ -191,9 +191,10 @@ public: // ROS
     ros::Publisher projected_cones_image_pub_;
     ros::Publisher center_line_marker_pub_;
     ros::Publisher lap_count_marker_pub_;
+    ros::Publisher global_cones_marker_pub_;
     ros::Publisher lane_marker_pub_;
-    ros::Publisher finish_line_marker_pub_;
-    ros::Publisher global_path_marker_pub_;
+    ros::Publisher finish_line_marker_pub_; // 추가
+    ros::Publisher global_path_marker_pub_; // 추가
 
     // Output messages
     fs_msgs::ControlCommand control_command_msg_;
