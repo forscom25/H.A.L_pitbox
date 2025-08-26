@@ -285,12 +285,15 @@ bool Clustering::isValidCone(const std::vector<int>& cluster_indices,
     if (cluster_indices.size() < params_->lidar_cone_detection_min_points_) 
         is_valid = false; // Too few points
     
-    // Calculate height range
+    // Calculate cone detection range
     float min_x = std::numeric_limits<float>::max();
     float max_x = std::numeric_limits<float>::lowest();
 
     float min_y = std::numeric_limits<float>::max();
     float max_y = std::numeric_limits<float>::lowest();
+
+    float min_z = std::numeric_limits<float>::max();
+    float max_z = std::numeric_limits<float>::lowest();
 
     for (int idx : cluster_indices) {
         min_x = std::min(min_x, cloud->points[idx].x);
@@ -298,6 +301,15 @@ bool Clustering::isValidCone(const std::vector<int>& cluster_indices,
 
         min_y = std::min(min_y, cloud->points[idx].y);
         max_y = std::max(max_y, cloud->points[idx].y);
+
+        min_z = std::min(min_z, cloud->points[idx].z);
+        max_z = std::max(max_z, cloud->points[idx].z);
+    }
+
+    float height = max_z - min_z;
+    
+    if (height < params_->lidar_cone_detection_min_height_ || height > params_->lidar_cone_detection_max_height_) {
+        is_valid = false;
     }
     
     float x_range = max_x - min_x;
