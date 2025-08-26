@@ -1201,6 +1201,8 @@ struct PerceptionParams
         if(!pnh.getParam("/perception/lidar_clustering/dbscan_min_points", lidar_dbscan_min_points_)){std::cerr<<"Param perception/lidar_clustering/dbscan_min_points has error" << std::endl; return false;}
 
         // LiDAR Cone Detection
+        if(!pnh.getParam("/perception/lidar_cone_detection/cone_min_height", lidar_cone_detection_min_height_)){std::cerr<<"Param perception/lidar_cone_detection/cone_min_height has error" << std::endl; return false;}
+        if(!pnh.getParam("/perception/lidar_cone_detection/cone_max_height", lidar_cone_detection_max_height_)){std::cerr<<"Param perception/lidar_cone_detection/cone_max_height has error" << std::endl; return false;}
         if(!pnh.getParam("/perception/lidar_cone_detection/cone_min_radius", lidar_cone_detection_min_radius_)){std::cerr<<"Param perception/lidar_cone_detection/cone_min_radius has error" << std::endl; return false;}
         if(!pnh.getParam("/perception/lidar_cone_detection/cone_max_radius", lidar_cone_detection_max_radius_)){std::cerr<<"Param perception/lidar_cone_detection/cone_max_radius has error" << std::endl; return false;}
         if(!pnh.getParam("/perception/lidar_cone_detection/cone_min_points", lidar_cone_detection_min_points_)){std::cerr<<"Param perception/lidar_cone_detection/cone_min_points has error" << std::endl; return false;}

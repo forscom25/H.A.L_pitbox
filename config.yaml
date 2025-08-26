@@ -33,6 +33,8 @@ perception:
 
   # Cone geometric constraints
   lidar_cone_detection:
+    cone_min_height: 0.1
+    cone_max_height: 0.5
     cone_min_radius: 0.00
     cone_max_radius: 0.7
     cone_min_points: 1

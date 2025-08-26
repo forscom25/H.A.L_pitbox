@@ -135,6 +135,7 @@ public: // Function components
     void publishDetectedConesMarker();
     void publishProjectedConesImage();
     void publishCenterLineMarker();
+    void publishGlobalConesMarker();
     void publishLaneMarker();
     
 
@@ -189,6 +190,7 @@ public: // ROS
     ros::Publisher projected_cones_image_pub_;
     ros::Publisher center_line_marker_pub_;
     ros::Publisher lap_count_marker_pub_;
+    ros::Publisher global_cones_marker_pub_;
     ros::Publisher lane_marker_pub_;
 
     // Output messages
