@@ -83,7 +83,7 @@ perception:
     bilateral_filter_diameter: 9
 
   camera_hsv_window_size:
-    window_size: 20
+    window_size: 15
 
   # HSV thresholds for yellow cone detection
   camera_hsv_yellow:
@@ -130,7 +130,7 @@ mapping:
   cone_memory_association_threshold: 1.0
 
   # Cone sorting parameters for lane generation
-  max_connection_distance: 10.0
+  max_connection_distance: 15.0
   direction_weight: 0.5 # Path direction consistency weight (0.0 ~1.0)
 
   # Cone map refinement parameters
@@ -143,8 +143,8 @@ planning:
   trajectory:
     # Basic trajectory generation
     lookahead_distance: 20.0
-    waypoint_spacing: 2.0
-    default_speed: 3.0
+    waypoint_spacing: 0.5
+    default_speed: 3.0 # StopTrajectory
     
     # Cone-based path planning (meters)
     max_cone_distance: 25.0
@@ -154,10 +154,16 @@ planning:
     safety_margin: 0.5
 
     # Curvature-based speed planning
-    max_speed: 3.0
+    max_speed: 3.5
     min_speed: 1.0
-    curvature_gain: 5.0
-
+    #curvature_gain: 5.0
+     # NEW: Sigmoid function parameters for speed planning
+    sigmoid_k_gain: 150.0  # 시그모이드 함수의 기울기 (가파른 정도). 클수록 급격히 감속.
+    sigmoid_x_offset: 0.07 # 감속이 시작되는 곡률 지점. 클수록 더 높은 곡률에서 감속 시작.
+    # NEW: Path Smoothing Parameter
+    path_smoothing_factor: 0.5 # 0.0=스무딩 없음, 1.0에 가까울수록 매우 부드러워짐
+    # NEW: Speed Lookahead Parameter
+    speed_lookahead_distance: 2.0 # [m] 스로틀 제어를 위해 이 거리만큼 앞선 지점의 목표 속도를 사용
   behavior:
     # Lap Counting & Race Logic
     # total laps based on KSAE FSD rules
@@ -182,16 +188,17 @@ control:
 
   Stanley:
     k_gain: 0.7
+    k_gain_curvature_boost: 1.2
 
   # PID Speed Control Parameters
   SpeedControl:
-    pid_kp: 0.5
-    pid_ki: 0.01
-    pid_kd: 0.02
-    max_throttle: 0.6
+    pid_kp: 0.3
+    pid_ki: 0.0
+    pid_kd: 0.0
+    max_throttle: 0.4
 
-    # Gain for steering-based speed dampening. Higher value means more aggressive slowing on turns.
-    steering_based_speed_gain: 0.2
+    # Steering-based speed dampening gain
+    steering_based_speed_gain: 0.0 # Higher value means more aggressive slowing on turns.
 
   Vehicle:
     wheel_base: 1.55
