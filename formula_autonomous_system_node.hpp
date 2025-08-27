@@ -137,9 +137,10 @@ public: // Function components
     void publishCenterLineMarker();
     void publishGlobalConesMarker();
     void publishLaneMarker();
-    void publishGlobalPathMarker(); // 추가
-    void publishFinishLineMarker(); // 추가
-
+    void publishStartFinishLineMarker();
+    void publishGlobalPathMarker();                  // Globalpath
+    void publishTrajectoryFromGlobalPathMarker();    // TrajectoryFromGlobalpath
+    void publishCurvatureMarker(); // 곡률 시각화 마커 퍼블리시 함수
 // Variables
 private:
     bool is_initialized_;
@@ -193,9 +194,9 @@ public: // ROS
     ros::Publisher lap_count_marker_pub_;
     ros::Publisher global_cones_marker_pub_;
     ros::Publisher lane_marker_pub_;
-    ros::Publisher finish_line_marker_pub_; // 추가
-    ros::Publisher global_path_marker_pub_; // 추가
-
+    ros::Publisher global_path_marker_pub_;                    // Globalpath
+    ros::Publisher trajectory_from_global_path_marker_pub_;    // TrajectoryFromGlobalpath
+    ros::Publisher curvature_marker_pub_; // 곡률 시각화 마커 퍼블리셔
     // Output messages
     fs_msgs::ControlCommand control_command_msg_;
     std_msgs::String autonomous_mode_msg_;
