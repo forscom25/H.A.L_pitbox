@@ -1325,7 +1325,7 @@ struct MappingParams {
     double cone_memory_association_threshold_;      // Minimum association confidence to consider a match
     double max_connection_distance_;                // Maximum distance to connect cones (m)
     double direction_weight_;                       // Weight for direction consistency in cone sorting
-    double max_dist_from_lane_; // Maximum distance from lane to consider a cone valid (m)
+    double max_dist_from_lane_;                     // Maximum distance from lane to consider a cone valid (m)
     
     // Print parameters for debugging
     void print() const {
@@ -1371,9 +1371,13 @@ struct PlanningParams {
     double max_speed_;              // maximum speed (m/s)
     double min_speed_;              // minimum speed (m/s)
     double curvature_gain_;         // curvature gain for speed adjustment
-    // Start/Finish Line 및 Lap Counting 파라미터(아래 2줄 추가)
-    double max_x_separation_;
-    int total_laps_;
+    // =================== NEW: Sigmoid Parameters ===================
+    double sigmoid_k_gain_;
+    double sigmoid_x_offset_;
+    // =================== NEW: Path Smoothing Parameter ===================
+    double path_smoothing_factor_; // 경로 스무딩 강도 (0.0 ~ 1.0)
+    double speed_lookahead_distance_;
+
     // Print current parameters
     void print() const {
         printf("=== Trajectory Parameters ===\n");
@@ -1401,8 +1405,11 @@ struct PlanningParams {
         if(!pnh.getParam("/planning/trajectory/safety_margin", safety_margin_)){std::cerr<<"Param planning/trajectory/safety_margin has error" << std::endl; return false;}
         if(!pnh.getParam("/planning/trajectory/max_speed", max_speed_)){std::cerr<<"Param planning/trajectory/max_speed has error" << std::endl; return false;}
         if(!pnh.getParam("/planning/trajectory/min_speed", min_speed_)){std::cerr<<"Param planning/trajectory/min_speed has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/curvature_gain", curvature_gain_)){std::cerr<<"Param planning/trajectory/curvature_gain has error" << std::endl; return false;}
-
+        //if(!pnh.getParam("/planning/trajectory/curvature_gain", curvature_gain_)){std::cerr<<"Param planning/trajectory/curvature_gain has error" << std::endl; return false;}
+        if(!pnh.getParam("/planning/trajectory/sigmoid_k_gain", sigmoid_k_gain_)){std::cerr<<"Param planning/trajectory/sigmoid_k_gain has error" << std::endl; return false;}
+        if(!pnh.getParam("/planning/trajectory/sigmoid_x_offset", sigmoid_x_offset_)){std::cerr<<"Param planning/trajectory/sigmoid_x_offset has error" << std::endl; return false;}
+        if(!pnh.getParam("/planning/trajectory/path_smoothing_factor", path_smoothing_factor_)){std::cerr<<"Param planning/trajectory/path_smoothing_factor has error" << std::endl; return false;}
+        if(!pnh.getParam("/planning/trajectory/speed_lookahead_distance", speed_lookahead_distance_)){std::cerr<<"Param planning/trajectory/speed_lookahead_distance has error" << std::endl; return false;}
         return true;
     }
 };
@@ -1418,7 +1425,8 @@ struct ControlParams {
     double pp_max_steer_angle_;       // maximum steering angle (radians)
 
     // ===================  Stanley Controller Parameters =================== 
-    double stanley_k_gain_; // Stanley controller gain k
+    double k_gain_; // Stanley controller gain k
+    double k_gain_curvature_boost_; // k boost depending on curvature
 
     // =================== Longitudinal Control: PID Controller ===================
     double pid_kp_;                    // proportional gain
@@ -1441,7 +1449,8 @@ struct ControlParams {
         if(!pnh.getParam("/control/PurePursuit/max_steer_angle", pp_max_steer_angle_)){std::cerr<<"Param control/PurePursuit/max_steer_angle has error" << std::endl; return false;}
 
         // ===================  Stanley Controller Parameters =================== 
-        if(!pnh.getParam("/control/Stanley/k_gain", stanley_k_gain_)){std::cerr<<"Param control/Stanley/k_gain has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/Stanley/k_gain", k_gain_)){std::cerr<<"Param control/Stanley/k_gain has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/Stanley/k_gain_curvature_boost", k_gain_curvature_boost_)){std::cerr<<"Param control/Stanley/k_gain_curvature_boost has error" << std::endl; return false;}
         
         // =================== Longitudinal Control: PID Controller ===================
         if(!pnh.getParam("/control/SpeedControl/pid_kp", pid_kp_)){std::cerr<<"Param control/SpeedControl/pid_kp has error" << std::endl; return false;}
@@ -1449,7 +1458,6 @@ struct ControlParams {
         if(!pnh.getParam("/control/SpeedControl/pid_kd", pid_kd_)){std::cerr<<"Param control/SpeedControl/pid_kd has error" << std::endl; return false;}
         if(!pnh.getParam("/control/SpeedControl/max_throttle", max_throttle_)){std::cerr<<"Param control/SpeedControl/max_throttle has error" << std::endl; return false;}
         if(!pnh.getParam("/control/SpeedControl/steering_based_speed_gain", steering_based_speed_gain_)){std::cerr<<"Param control/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
-
 
         if(!pnh.getParam("/control/Vehicle/wheel_base", vehicle_length_)){std::cerr<<"Param control/Vehicle/wheel_base has error" << std::endl; return false;}
         
@@ -1752,14 +1760,17 @@ public:
     explicit TrajectoryGenerator(const std::shared_ptr<PlanningParams>& params);
     ~TrajectoryGenerator() = default;
     
-    // Generate trajectory from cones and current planning state
-    std::vector<TrajectoryPoint> generateTrajectory(const std::vector<Cone>& cones, ASState planning_state);
+    // Generate trajectory from cones and current planning state(for Mapping mode)
+    std::vector<TrajectoryPoint> generateTrajectoryFromCones(const std::vector<Cone>& cones, ASState planning_state);
+    // Generate local trajectory by following the global path (for RACING mode)
+    std::vector<TrajectoryPoint> getTrajectoryFromGlobalPath(const VehicleState& vehicle_state, const std::vector<TrajectoryPoint>& global_path);
 
     /**
      * @brief Get last generated trajectory
      * @return Last trajectory
      */
     const std::vector<TrajectoryPoint>& getLastTrajectory() const { return last_trajectory_; }
+    const std::vector<Eigen::Vector2d>& getLastLocalPathPoints() const { return last_local_path_points_; }
 
     /**
      * @brief Update trajectory parameters
@@ -1774,19 +1785,17 @@ public:
      */
     void printTrajectoryStats() const;
 
-    std::vector<TrajectoryPoint> generateStopTrajectory();
-    
-
 private:
     // Utility functions
     double calculateCurvature(const tk::spline& s, double x);
     double calculateDistance(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2) const;
     double calculateAngle(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2) const;
-
+    std::vector<TrajectoryPoint> generateStopTrajectory();
 
     // Member variables
     std::shared_ptr<PlanningParams> params_;
     std::vector<TrajectoryPoint> last_trajectory_;
+    std::vector<Eigen::Vector2d> last_local_path_points_;
     
     // Statistics
     int generated_trajectories_;
@@ -1828,6 +1837,7 @@ public:
 
 private:
     std::shared_ptr<ControlParams> params_;
+    mutable double last_filtered_steering_angle_ = 0.0;
 };
 
 /**
@@ -1904,16 +1914,14 @@ public:
         }
         return {};
     }
-    const std::vector<TrajectoryPoint>& getGlobalPath() const { // system_node가 글로벌 경로를 가져갈 getter
-        return global_path_;
-    }
-    // 피니시 라인 위치와 방향을 가져올 public 함수
-    const Eigen::Vector2d& getStartFinishLineCenter() const {
-        return start_finish_line_center_;
-    }
-    double getStartFinishLineYaw() const {
-        return start_finish_line_yaw_;
-    }
+    Eigen::Vector2d getStartFinishLineCenter() const { return start_finish_line_center_; }
+    Eigen::Vector2d getStartFinishLineDirection() const { return start_finish_line_direction_; }
+    bool isStartFinishLineDefined() const { return is_start_finish_line_defined_; }
+
+    // Globalpath
+    std::vector<TrajectoryPoint> getGlobalPath() const { return global_path_; }
+    bool isGlobalPathGenerated() const { return is_global_path_generated_; }
+    const std::unique_ptr<TrajectoryGenerator>& getTrajectoryGenerator() const { return trajectory_generator_; }
 
     private: // Main thread
 
@@ -1964,11 +1972,12 @@ private:
     DrivingMode current_mode_;
     int current_lap_;
     Eigen::Vector2d start_finish_line_center_;
+    Eigen::Vector2d start_finish_line_direction_;
     double start_finish_line_yaw_;
     bool is_start_finish_line_defined_;
     bool just_crossed_line_;
-    std::chrono::steady_clock::time_point last_lap_crossing_time_; // 랩카운팅 중복 방지
-    Eigen::Vector2d previous_position_; // 도경이가 추가
+    double vehicle_position_relative_to_line_;
+
     // Trajectory planning
     std::shared_ptr<PlanningParams> planning_params_;
     std::unique_ptr<TrajectoryGenerator> trajectory_generator_;
