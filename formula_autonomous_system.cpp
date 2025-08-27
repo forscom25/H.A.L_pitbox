@@ -1938,16 +1938,14 @@ double Stanley::calculateSteeringAngle(const VehicleState& current_state, const 
     }
 
     // 3. Calculate the cross track error(with sign)
-    const Eigen::Vector2d& p_start = path[closest_segment_idx].position;
-    const Eigen::Vector2d& p_end = path[closest_segment_idx+1].position;
-    Eigen::Vector2d path_tangent = (p_end - p_start).normalized();
+    double path_yaw = path[closest_segment_idx].yaw;
+    Eigen::Vector2d error_vec = front_axle_pos - closest_proj_point;
 
     // Determine left or right direction error
-    double error_sign = (front_axle_pos.y() - closest_proj_point.y()) > 0 ? 1.0 : -1.0;
-    double cross_track_error = std::sqrt(min_dist) * error_sign;
+    double cross_track_error = error_vec.y() * std::cos(path_yaw) - error_vec.x() * std::sin(path_yaw);
 
     // 4. Calculate the heading error
-    double heading_error = path[closest_segment_idx].yaw;
+    double heading_error = path_yaw;
 
     // 5. Calculate dynamic k gain based on curvature
     const TrajectoryPoint& target_point = path[closest_segment_idx];
@@ -1956,7 +1954,7 @@ double Stanley::calculateSteeringAngle(const VehicleState& current_state, const 
     double dynamic_k = params_->k_gain_ * curvature_boost_factor;
 
     // 6. Calculate the cross track steering, 0.1 is added to the speed to avoid division by zero
-    double cross_track_steering = atan2(dynamic_k * cross_track_error, current_state.speed + 0.1);
+    double cross_track_steering = atan2(dynamic_k * -cross_track_error, current_state.speed + 0.1);
 
     // 7. Calculate the steering angle
     double steering_angle = heading_error + cross_track_steering;

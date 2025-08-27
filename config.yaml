@@ -182,7 +182,7 @@ control:
 
   Stanley:
     k_gain: 0.7
-    k_gain_curvature_boost: 1.5
+    k_gain_curvature_boost: 1.2
 
   # PID Speed Control Parameters
   SpeedControl:
