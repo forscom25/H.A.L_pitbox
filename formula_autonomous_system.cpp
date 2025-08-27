@@ -307,7 +307,7 @@ bool Clustering::isValidCone(const std::vector<int>& cluster_indices,
     }
 
     float height = max_z - min_z;
-    
+
     if (height < params_->lidar_cone_detection_min_height_ || height > params_->lidar_cone_detection_max_height_) {
         is_valid = false;
     }
@@ -1047,24 +1047,26 @@ std::vector<Eigen::Vector2d> MapManager::sortConesByProximity(const std::vector<
     const double max_connection_distance = params_->max_connection_distance_;
     const double direction_weight = params_->direction_weight_;
 
-    // Start from the cone with the smallest x coordinate (closest to the vehicle)
+    // Start sorting from the cone closest to the vehicle's origin (0,0),
+    // which represents the "first" cone encountered.
     auto start_it = std::min_element(remaining_cones.begin(), remaining_cones.end(),
         [](const Eigen::Vector2d& a, const Eigen::Vector2d& b) {
-            return a.x() < b.x();
+            // squaredNorm() calculates the squared distance from the origin.
+            return a.squaredNorm() < b.squaredNorm();
         });
 
     sorted_cones.push_back(*start_it);
     remaining_cones.erase(start_it);
 
-    // Vehicle heading(x) as initial direction
-    Eigen::Vector2d current_direction(1.0, 0.0);
+    // Initial direction is from the origin to the first cone.
+    Eigen::Vector2d current_direction = sorted_cones.front().normalized();
     
     // Repeat until all cones are sorted
     while (!remaining_cones.empty()) {
 
         Eigen::Vector2d current_point = sorted_cones.back();
         
-        // Update direction vector
+        // Update direction vector based on the last two sorted cones
         if (sorted_cones.size() > 1) {
             current_direction = (sorted_cones.back() - sorted_cones[sorted_cones.size() - 2]).normalized();
         }
@@ -1073,20 +1075,18 @@ std::vector<Eigen::Vector2d> MapManager::sortConesByProximity(const std::vector<
         auto best_it = remaining_cones.begin();
 
         for (auto it = remaining_cones.begin(); it != remaining_cones.end(); ++it) {
-            double dist = (it->x() - current_point.x()) * (it->x() - current_point.x()) +
-                             (it->y() - current_point.y()) * (it->y() - current_point.y());
-            dist = std::sqrt(dist);
+            double dist = (*it - current_point).norm();
 
-            // noise filter
+            // Skip cones that are too far away
             if (dist > max_connection_distance) {
                 continue;
             }
 
-            // Cost function based on direction vectors
+            // Cost function based on distance and direction consistency
             Eigen::Vector2d candidate_direction = (*it - current_point).normalized();
-            double dot_product = current_direction.dot(candidate_direction); // scalar product of two direction vector (correlation)
+            double dot_product = current_direction.dot(candidate_direction);
 
-            // Cost function(lower the better)
+            // Lower score is better. Penalize directions that deviate from the current path.
             double score = dist * (1.0 + direction_weight * (1.0 - dot_product));
 
             if (score < best_score) {
@@ -1095,9 +1095,34 @@ std::vector<Eigen::Vector2d> MapManager::sortConesByProximity(const std::vector<
             }
         }
 
-
+        // If a large gap is detected (no cone found within max_connection_distance)
         if (best_score == std::numeric_limits<double>::max()) {
             break;
+
+            if (remaining_cones.empty()) {
+                break; // No more cones left to process.
+            }
+
+            ROS_WARN("MapManager: Large gap detected. Jumping to the next spatially closest cone.");
+
+            // Find the absolute closest cone to bridge the gap
+            auto closest_after_gap_it = remaining_cones.begin();
+            double min_dist_after_gap = std::numeric_limits<double>::max();
+
+            for (auto it = remaining_cones.begin(); it != remaining_cones.end(); ++it) {
+                double dist = (*it - current_point).norm();
+
+                if (dist < min_dist_after_gap) {
+                    min_dist_after_gap = dist;
+                    closest_after_gap_it = it;
+                }
+            }
+
+            best_it = closest_after_gap_it; // Force the connection
+        }
+
+        if (best_it == remaining_cones.end()) { // Safety check
+             break;
         }
 
         sorted_cones.push_back(*best_it);
@@ -1123,6 +1148,27 @@ void MapManager::generateLanesFromMemory() {
     // Sort cones by proximity
     auto sorted_blue = sortConesByProximity(blue_cones);
     auto sorted_yellow = sortConesByProximity(yellow_cones);
+
+    // To create a closed loop, check if the last and first cones are close enough to connect.
+    if (sorted_blue.size() > 2) {
+
+        double dist = (sorted_blue.back() - sorted_blue.front()).norm();
+
+        if (dist < params_->max_connection_distance_) {
+            sorted_blue.push_back(sorted_blue.front()); // Add the first point to the end
+            ROS_INFO_ONCE("MapManager: Blue lane is now a closed loop.");
+        }
+    }
+
+    if (sorted_yellow.size() > 2) {
+
+        double dist = (sorted_yellow.back() - sorted_yellow.front()).norm();
+
+        if (dist < params_->max_connection_distance_) {
+            sorted_yellow.push_back(sorted_yellow.front()); // Add the first point to the end
+            ROS_INFO_ONCE("MapManager: Yellow lane is now a closed loop.");
+        }
+    }
 
     // Generate spline for left lane (blue cones)
     left_lane_points_.clear();
@@ -1249,6 +1295,7 @@ void MapManager::refineConeMap() {
         if (closest_lane_dist < max_dist_threshold) {// noise filter
             
             Cone refined_cone = cone;
+
             if (min_dist_to_left_lane < min_dist_to_right_lane) {
                 refined_cone.color = "blue";
             } else {
@@ -1474,7 +1521,7 @@ TrajectoryGenerator::TrajectoryGenerator(const std::shared_ptr<PlanningParams>& 
               << params_->waypoint_spacing_ << "m" << std::endl;
 }
 
-std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(const std::vector<Cone>& cones, ASState planning_state)
+std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectoryFromCones(const std::vector<Cone>& cones, ASState planning_state)
 {
     last_trajectory_.clear();
 
@@ -1484,7 +1531,7 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(const std::
     
     std::vector<Eigen::Vector2d> blue_cones_local, yellow_cones_local;
 
-    // Filter cones based on color and position
+    // 1. Filter cones based on color and position
     for (const auto& cone : cones) {
         if (cone.center.x > 0.1) { // Only consider cones in front of the vehicle
             if (cone.color == "blue") {
@@ -1507,8 +1554,8 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(const std::
     
     std::vector<Eigen::Vector2d> path_points;
 
-    // Start with the vehicle's current position
-    path_points.push_back(Eigen::Vector2d(0.0, 0.0));
+    // 2. Generate path point based on local cone map
+    path_points.push_back(Eigen::Vector2d(0.0, 0.0)); // Start with the (0,0) vehicle's current position
 
     int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_);
     for (int i = 1; i <= num_points; ++i) {
@@ -1545,35 +1592,56 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(const std::
 
         } else if (closest_yellow) {
             waypoint.y() = closest_yellow->y() + params_->lane_offset_;
+        }
+        
+        // ==================== 스무딩 로직 추가 ====================
+        if (path_points.size() >= 2) {
+            // 이전 경로점의 y값과 새로 계산된 y값을 가중 평균하여 부드럽게 만듭니다.
+            double previous_y = path_points.back().y();
+            double smoothing_factor = 0.7; // 이전 경로점의 영향력 (0.0 ~ 1.0)
+            
+            // 콘이 하나도 감지되지 않았을 때만 이전 경로를 강하게 추종
+            if (!closest_blue && !closest_yellow) {
+                 // Predict future trajectory based on trajectory history
+                Eigen::Vector2d last_point = path_points.back();
+                Eigen::Vector2d prev_point = path_points[path_points.size() - 2];
 
-        // Extrapolation logic
-        } else if (path_points.size() >= 2) {
-
-            // Predict future trajectory based on trajectory history
-            Eigen::Vector2d last_point = path_points.back();
-            Eigen::Vector2d prev_point = path_points[path_points.size() - 2];
-
-            double dx = last_point.x() - prev_point.x();
-            double dy = last_point.y() - prev_point.y();
-           
-            if (std::abs(dx) > 1e-6) { // prevent 0 division
-                double slope = dy / dx;
-                // 마지막 점에서 동일한 기울기로 연장하여 y좌표 예측
-                waypoint.y() = last_point.y() + slope * (target_x - last_point.x());
+                double dx = last_point.x() - prev_point.x();
+                double dy = last_point.y() - prev_point.y();
+            
+                if (std::abs(dx) > 1e-6) { // prevent 0 division
+                    double slope = dy / dx;
+                    // 마지막 점에서 동일한 기울기로 연장하여 y좌표 예측
+                    waypoint.y() = last_point.y() + slope * (target_x - last_point.x());
+                } else {
+                    // 수직에 가까운 경우, 이전 y값을 그대로 사용
+                    waypoint.y() = last_point.y();
+                }
             } else {
-                // 수직에 가까운 경우, 이전 y값을 그대로 사용
-                waypoint.y() = last_point.y();
+                // 콘이 감지되었을 때는 새로운 정보를 더 많이 반영
+                waypoint.y() = (smoothing_factor * previous_y) + ((1.0 - smoothing_factor) * waypoint.y());
             }
-
-        } else if (!path_points.empty()) {
-            // 경로점이 하나만 있을 경우, 이전 y값을 그대로 사용 (직진)
-            waypoint.y() = path_points.back().y();
         }
 
         path_points.push_back(waypoint);
     }
+    // ======================= 경로 스무딩 필터 추가 =======================
+    // 촘촘한 경로점이 만드는 노이즈를 제거하여 진동을 방지합니다.
+    if (path_points.size() > 2 && params_->path_smoothing_factor_ > 0.0) {
+        std::vector<Eigen::Vector2d> smoothed_points;
+        smoothed_points.push_back(path_points.front()); // 첫 점은 그대로 유지
 
-    // Use Parametric Spline
+        for (size_t i = 1; i < path_points.size(); ++i) {
+            // 이전 스무딩된 y값과 현재 y값을 가중 평균
+            double smoothed_y = params_->path_smoothing_factor_ * smoothed_points.back().y() +
+                              (1.0 - params_->path_smoothing_factor_) * path_points[i].y();
+            
+            smoothed_points.emplace_back(path_points[i].x(), smoothed_y);
+        }
+        path_points = smoothed_points; // 원본 경로점을 스무딩된 경로점으로 교체
+    }
+    // ====================================================================
+    // 3. Use Parametric Spline
     if (path_points.size() >= 2) {
 
         std::vector<double> s_pts, x_pts, y_pts;
@@ -1597,7 +1665,7 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(const std::
         spline_x.set_points(s_pts, x_pts);
         spline_y.set_points(s_pts, y_pts);
 
-        // Generate trajectory points from the path
+        // 4. Generate trajectory points from the path
         double total_length = s_pts.back();
         for (double s = 0; s < total_length; s += 0.5) { // 0.5m 간격으로 점 생성
             double x = spline_x(s);
@@ -1614,13 +1682,151 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(const std::
             double curvature = std::abs(dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
 
             // 곡률 기반 속도 계획
-            double desired_speed = params_->max_speed_ / (1.0 + params_->curvature_gain_ * std::abs(curvature));
+            //double desired_speed = params_->max_speed_ / (1.0 + params_->curvature_gain_ * std::abs(curvature));
+            // 새로운 시그모이드 기반 속도 계획:
+            double speed_range = params_->max_speed_ - params_->min_speed_;
+            double sigmoid_value = 1.0 / (1.0 + std::exp(params_->sigmoid_k_gain_ * (curvature - params_->sigmoid_x_offset_)));
+            double desired_speed = params_->min_speed_ + speed_range * sigmoid_value;
+            
             double target_speed = std::max(params_->min_speed_, std::min(desired_speed, params_->max_speed_));
 
             last_trajectory_.emplace_back(x, y, yaw, curvature, target_speed, s);
         }
     }
     
+    return last_trajectory_;
+}
+
+/**
+ * @brief Generates a local trajectory for the controller by extracting and transforming a segment from the global path.
+ * @param vehicle_state The current state of the vehicle in the global frame.
+ * @param global_path The pre-computed global path.
+ * @return A local trajectory in the vehicle's coordinate frame.
+ */
+
+ std::vector<TrajectoryPoint> TrajectoryGenerator::getTrajectoryFromGlobalPath(const VehicleState& vehicle_state, const std::vector<TrajectoryPoint>& global_path) {
+    last_trajectory_.clear();
+    last_local_path_points_.clear(); // 디버깅용 경로 초기화
+    if (global_path.size() < 2) return last_trajectory_;
+
+    double vehicle_yaw = vehicle_state.yaw;
+    Eigen::Vector2d vehicle_pos = vehicle_state.position;
+
+    // 1. 벡터 정보를 사용하여 전역 경로에서 최적의 시작점을 찾습니다.
+    // 차량과 가깝고, 진행 방향이 유사한 지점을 찾습니다.
+    double best_score = std::numeric_limits<double>::max();
+    size_t target_idx = 0;
+
+    // 차량의 현재 진행 방향 벡터 생성
+    Eigen::Vector2d vehicle_heading_vec(cos(vehicle_yaw), sin(vehicle_yaw));
+
+    for (size_t i = 0; i < global_path.size(); ++i) {
+
+        const auto& path_point = global_path[i];
+
+        // 경로 지점의 진행 방향 벡터 생성
+        Eigen::Vector2d path_heading_vec(cos(path_point.yaw), sin(path_point.yaw));
+        // 두 벡터의 내적(dot product)을 통해 방향 유사도 계산 (1에 가까울수록 유사)
+        double dot_product = vehicle_heading_vec.dot(path_heading_vec);
+
+        // 차량 진행 방향과 어느정도 유사한 방향의 점들만 후보로 간주
+        if (dot_product > 0) { // 90도 이내의 각도를 가진 점만 필터링
+
+            double dist_sq = (path_point.position - vehicle_pos).squaredNorm();
+            // 점수 = 거리 / (방향 유사도). 점수가 낮을수록 좋은 후보.
+            // (1.0 + dot_product)를 사용하여 방향이 유사할수록 점수에 큰 가중치를 줌.
+            double score = dist_sq / (1.0 + dot_product);
+
+            if (score < best_score) {
+                best_score = score;
+                target_idx = i;
+            }
+        }
+    }
+
+    // 2. 찾아낸 최적의 시작점부터 경로 조각을 추출합니다.
+    std::vector<TrajectoryPoint> local_path_global_coords;
+    double current_s = 0.0;
+
+    for (size_t i = 0; i < global_path.size(); ++i) {
+        size_t current_idx = (target_idx + i) % global_path.size(); // 루프 처리
+
+        if (i > 0) {
+            size_t prev_idx = (target_idx + i - 1) % global_path.size();
+            current_s += (global_path[current_idx].position - global_path[prev_idx].position).norm();
+        }
+
+        if (current_s > params_->lookahead_distance_) {
+            break;
+        }
+
+        local_path_global_coords.push_back(global_path[current_idx]);
+    }
+
+    // 3. 추출된 경로 조각을 차량의 지역 좌표계로 변환합니다.
+    std::vector<Eigen::Vector2d> path_points_local;
+
+    for (const auto& global_point : local_path_global_coords) {
+
+        Eigen::Vector2d relative_pos = global_point.position - vehicle_pos;
+        double x_local = relative_pos.x() * cos(-vehicle_yaw) - relative_pos.y() * sin(-vehicle_yaw);
+        double y_local = relative_pos.x() * sin(-vehicle_yaw) + relative_pos.y() * cos(-vehicle_yaw);
+
+        path_points_local.emplace_back(x_local, y_local);
+    }
+
+    last_local_path_points_ = path_points_local; // 시각화를 위해 저장
+
+    if (path_points_local.size() < 3) {
+        ROS_WARN_THROTTLE(1.0, "TrajectoryGenerator: Not enough points from global path (%zu) to create a spline.", path_points_local.size());
+        return last_trajectory_;
+    }
+
+    // 4. 지역 좌표계의 점들로 부드러운 스플라인 경로를 생성합니다.
+    std::vector<double> s_pts, x_pts, y_pts;
+
+    s_pts.push_back(0.0);
+    x_pts.push_back(path_points_local[0].x());
+    y_pts.push_back(path_points_local[0].y());
+
+    for (size_t i = 1; i < path_points_local.size(); ++i) {
+
+        double dist = (path_points_local[i] - path_points_local[i - 1]).norm();
+
+        if (dist < 0.01) continue;
+
+        s_pts.push_back(s_pts.back() + dist);
+        x_pts.push_back(path_points_local[i].x());
+        y_pts.push_back(path_points_local[i].y());
+    }
+
+    if (x_pts.size() < 3) {
+        ROS_WARN_THROTTLE(1.0, "TrajectoryGenerator: Not enough unique points after filtering (%zu) to create a spline.", x_pts.size());
+        return last_trajectory_;
+    }
+
+    tk::spline spline_x, spline_y;
+
+    spline_x.set_points(s_pts, x_pts);
+    spline_y.set_points(s_pts, y_pts);
+    double total_length = s_pts.back();
+
+    for (double s = 0; s < total_length; s += params_->waypoint_spacing_) {
+
+        double x = spline_x(s);
+        double y = spline_y(s);
+        double dx = spline_x.deriv(1, s);
+        double dy = spline_y.deriv(1, s);
+        double yaw = std::atan2(dy, dx);
+        double ddx = spline_x.deriv(2, s);
+        double ddy = spline_y.deriv(2, s);
+        double curvature = std::abs(dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
+        double desired_speed = params_->max_speed_ / (1.0 + params_->curvature_gain_ * std::abs(curvature));
+        double target_speed = std::max(params_->min_speed_, std::min(desired_speed, params_->max_speed_));
+
+        last_trajectory_.emplace_back(x, y, yaw, curvature, target_speed, s);
+    }
+
     return last_trajectory_;
 }
 
@@ -1729,49 +1935,63 @@ double Stanley::calculateSteeringAngle(const VehicleState& current_state, const 
 {
     if (path.empty()) return 0.0;
 
-    // Get the point of front axle
-    double min_dist = std::numeric_limits<double>::max();
-    int closest_idx = 0;
-    Eigen::Vector2d front_axle_pos = path[0].position + 
-        Eigen::Vector2d(params_->vehicle_length_ * cos(path[0].yaw) * 0.5, 
-                        params_->vehicle_length_ * sin(path[0].yaw) * 0.5); // local trajectory is defined at the center of the vehicle
+    // 1. Get the point of front axle(vehicle frame)
+    const Eigen::Vector2d front_axle_pos(params_->vehicle_length_ * 0.5, 0.0); // local trajectory is defined at the center of the vehicle
     
-    // Find the closest point on the path to the front axle
-    for (int i = 0; i < path.size(); ++i) {
-        double dist = (path[i].position - front_axle_pos).norm();
-        if (dist < min_dist) {
-            min_dist = dist;
-            closest_idx = i;
+    // 2. Find the closest point on the path to the front axle
+    double min_dist = std::numeric_limits<double>::max();
+    int closest_segment_idx = 0;
+    Eigen::Vector2d closest_proj_point;
+    
+    for (size_t i = 0; i + 1 < path.size(); ++i) {
+        const Eigen::Vector2d& p1 = path[i].position;
+        const Eigen::Vector2d& p2 = path[i+1].position;
+        const Eigen::Vector2d segment = p2 - p1;
+
+        if (segment.squaredNorm() < 1e-8) continue; // skip if too short
+
+        double t = (front_axle_pos - p1).dot(segment) / segment.squaredNorm();
+        t = std::max(0.0, std::min(1.0, t)); // t (0.0 ~ 1.0)
+
+        Eigen::Vector2d projection = p1 + t * segment;
+        double dist_sq = (front_axle_pos - projection).squaredNorm();
+
+        if (dist_sq < min_dist) {
+            min_dist = dist_sq;
+            closest_segment_idx = i;
+            closest_proj_point = projection;
         }
     }
 
-    // Get the target point
-    const TrajectoryPoint& target_point = path[closest_idx];
-    double path_yaw = target_point.yaw;
+    // 3. Calculate the cross track error(with sign)
+    double path_yaw = path[closest_segment_idx].yaw;
+    Eigen::Vector2d error_vec = front_axle_pos - closest_proj_point;
 
-    // Calculate the cross track error
-    Eigen::Vector2d error_vec = front_axle_pos - target_point.position;
-    double cross_track_error = error_vec.norm();
-    
-    // Calculate the heading error
-    double path_dx = cos(path_yaw + M_PI_2);
-    double path_dy = sin(path_yaw + M_PI_2);
-    if (error_vec.dot(Eigen::Vector2d(path_dx, path_dy)) < 0) {
-        cross_track_error *= -1.0;
-    }
+    // Determine left or right direction error
+    double cross_track_error = error_vec.y() * std::cos(path_yaw) - error_vec.x() * std::sin(path_yaw);
 
+    // 4. Calculate the heading error
     double heading_error = path_yaw;
-    while (heading_error > M_PI) heading_error -= 2 * M_PI;
-    while (heading_error < -M_PI) heading_error += 2 * M_PI;
 
-    // Calculate the cross track steering, 0.1 is added to the speed to avoid division by zero
-    double cross_track_steering = atan2(params_->stanley_k_gain_ * cross_track_error, current_state.speed + 0.1);
+    // 5. Calculate dynamic k gain based on curvature
+    const TrajectoryPoint& target_point = path[closest_segment_idx];
+    double target_curvature = std::abs(target_point.curvature);
+    double curvature_boost_factor = 1.0 + params_->k_gain_curvature_boost_ * target_curvature;
+    double dynamic_k = params_->k_gain_ * curvature_boost_factor;
 
-    // Calculate the steering angle
+    // 6. Calculate the cross track steering, 0.1 is added to the speed to avoid division by zero
+    double cross_track_steering = atan2(dynamic_k * -cross_track_error, current_state.speed + 0.1);
+
+    // 7. Calculate the steering angle
     double steering_angle = heading_error + cross_track_steering;
 
+    // 8. Low-Pass Filter
+    const double alpha = 0.6; // stability(0.0) <---> response(1.0)
+    double filtered_steering_angle = alpha * steering_angle + (1.0 - alpha) * last_filtered_steering_angle_;
+    last_filtered_steering_angle_ = filtered_steering_angle;
+
     // Clamp the steering angle: -max_steer_angle_ <= steering_angle <= max_steer_angle_
-    return std::clamp(steering_angle, -params_->pp_max_steer_angle_, params_->pp_max_steer_angle_);
+    return std::clamp(filtered_steering_angle, -params_->pp_max_steer_angle_, params_->pp_max_steer_angle_);
 }
 
 // ==================== PID Controller Implementation ====================
@@ -1853,7 +2073,8 @@ FormulaAutonomousSystem::FormulaAutonomousSystem():
     just_crossed_line_(false),
     current_mode_(DrivingMode::MAPPING),
     is_global_path_generated_(false),
-    current_lap_(1) {
+    current_lap_(0),
+    vehicle_position_relative_to_line_(0.0) {
 }
 
 FormulaAutonomousSystem::~FormulaAutonomousSystem(){
@@ -2036,11 +2257,22 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     // STEP 4: MAPPING & PLANNING - "Which way to go?"
     // =================================================================
 
-    // Behavior planning
-    setRacingStrategy(vehicle_state, cones_);
+    // Update global cone map
+    std::vector<Cone> cones_for_planning = map_manager_->updateAndGetPlannedCones(vehicle_state, cones_);
+    map_manager_->generateLanesFromMemory();
 
     // Behavior planning
-    // setRacingStrategy(vehicle_state, cones_for_planning);
+    setRacingStrategy(vehicle_state, cones_for_planning);
+
+    // Generate trajectory based on the current driving mode
+    if (current_mode_ == DrivingMode::RACING && is_global_path_generated_) {
+        // In RACING mode, follow the pre-calculated global path
+        trajectory_points_ = trajectory_generator_->getTrajectoryFromGlobalPath(vehicle_state, global_path_);
+
+    } else {
+        // In MAPPING mode (or as a fallback), generate path from real-time cones
+        trajectory_points_ = trajectory_generator_->generateTrajectoryFromCones(cones_for_planning, planning_state_);
+    }
 
     // =================================================================
     // STEP 5: CONTROL - "How do I get there?"
@@ -2051,7 +2283,21 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
 
     // 2. 종방향 제어: 목표 속도와 현재 속도를 기반으로 스로틀 계산
     // 2-1. (기본 속도) 곡률 기반으로 계산된 경로의 목표 속도를 가져옴
-    double base_target_speed = trajectory_points_[0].speed;
+    double base_target_speed = planning_params_->max_speed_; // 경로가 없을 경우를 대비한 기본값
+    if (!trajectory_points_.empty()) {
+        int speed_target_idx = 0;
+        // 경로를 따라가며 'speed_lookahead_distance'에 가장 가까운 지점을 찾음
+        for (size_t i = 0; i < trajectory_points_.size(); ++i) {
+            // 's'는 경로 시작점부터의 누적 거리
+            if (trajectory_points_[i].s >= planning_params_->speed_lookahead_distance_) {
+                speed_target_idx = i;
+                break;
+            }
+            // lookahead보다 짧은 경로인 경우, 경로의 마지막 점을 목표로 삼음
+            speed_target_idx = trajectory_points_.size() - 1;
+        }
+        base_target_speed = trajectory_points_[speed_target_idx].speed;
+    }
 
     // 2-2. (실시간 보정) 계산된 스티어링 각도에 비례하여 목표 속도를 추가로 감속
     double steering_dampening = std::abs(steering_angle) * control_params_->steering_based_speed_gain_;
@@ -2144,407 +2390,193 @@ std::vector<Cone> FormulaAutonomousSystem::getGlobalConeMap() const {
     }
     return {}; // Return empty vector if map_manager_ is not initialized
 }
-void FormulaAutonomousSystem::setRacingStrategy(const VehicleState& vehicle_state, const std::vector<Cone>& real_time_cones) {
-    // 1. 맵 매니저 업데이트: 실시간 콘으로 전역 콘 맵 업데이트
-    std::vector<Cone> cones_for_planning_local = map_manager_->updateAndGetPlannedCones(vehicle_state, real_time_cones);
-    
-    // 2. 시작/결승선 정의 및 랩 카운트 업데이트
+
+/**
+ * @brief Manages the overall racing strategy, including lap counting and mode switching.
+ */
+
+void FormulaAutonomousSystem::setRacingStrategy(const VehicleState& vehicle_state, const std::vector<Cone>& cones_for_planning) {
+    // 1. Define the start/finish line if it hasn't been defined yet.
     if (!is_start_finish_line_defined_) {
-        // 충분한 콘이 모였을 때 시작/결승선을 정의
-        // 이 부분은 config.yaml의 planning/behavior/min_y_separation, max_x_separation 파라미터를 활용하여
-        // 트랙 폭을 고려한 시작/결승선 로직으로 대체하는 것을 고려할 수 있습니다.
-        if (map_manager_->getGlobalConeMap().size() > 50) { // 예시: 충분한 콘이 있을 때 (기준은 상황에 따라 조정)
-             defineStartFinishLine(map_manager_->getGlobalConeMap());
-        }
+        defineStartFinishLine(cones_for_planning);
     }
+
+    // 2. Update the lap count if the line has been defined.
     if (is_start_finish_line_defined_) {
-        updateLapCount(vehicle_state); // current_lap_이 여기서 업데이트됩니다.
+        updateLapCount(vehicle_state);
     }
-
-    // 3. 모드 전환 로직 (MAPPING -> RACING)
-    if (current_mode_ == DrivingMode::MAPPING) {
-        // 맵핑 모드에서는 로컬 콘 맵과 차선 정보로 경로 생성
-        map_manager_->generateLanesFromMemory(); // 로컬 플래닝을 위해 매번 차선 생성
-        trajectory_points_ = trajectory_generator_->generateTrajectory(cones_for_planning_local, planning_state_);
-
-        // 1랩 완료 (current_lap_이 2가 되었을 때) 시 글로벌 경로 생성 및 RACING 모드 전환
-        if (current_lap_ > 1 && !is_global_path_generated_) {
-            ROS_INFO("Lap 1 finished. Refining cone map and generating Global Path...");
-            ROS_INFO("Starting map refinement...");
-            map_manager_->refineConeMap(); // 1랩 완료 시 한 번만 맵 정제
-            ROS_INFO("Map refinement completed.");
-            ROS_INFO("Starting lane generation from memory...");
-            map_manager_->generateLanesFromMemory(); // 정제된 맵으로 차선 다시 생성 (글로벌 경로 생성의 기반)
-            ROS_INFO("Lane generation from memory completed.");
-            ROS_INFO("Calling generateGlobalPath()...");     
-            generateGlobalPath();           // 글로벌 경로 생성
-            ROS_INFO("generateGlobalPath() completed."); 
-            is_global_path_generated_ = true;
-            current_mode_ = DrivingMode::RACING; // RACING 모드로 전환
-            ROS_INFO("Switched to RACING mode!");
-        }
-    } 
     
-    // 4. RACING 모드 경로 추종 로직
-    else if (current_mode_ == DrivingMode::RACING) { // else if를 사용하여 MAPPING과 RACING 모드 중 하나만 실행되도록
+    // 3. Switch driving mode and generate global path after lap 1.
+    if (current_lap_ > 1 && current_mode_ == DrivingMode::MAPPING && !is_global_path_generated_) {
+
+        ROS_INFO("FormulaAutonomousSystem: Lap 1 finished. Generating Global Path...");
+        generateGlobalPath(); // Call the path generation function
+
         if (!global_path_.empty()) {
-            // 차량의 현재 위치에서 글로벌 경로의 일부를 잘라내어 로컬 궤적으로 사용
-            // --- 이 부분이 핵심: global_path_를 기반으로 trajectory_points_를 채움 ---
-            // 가장 가까운 global_path_ 포인트 찾기
-            double min_dist_sq = std::numeric_limits<double>::max();
-            int closest_idx = 0;
-            Eigen::Vector2d current_vehicle_pos(vehicle_state.position.x(), vehicle_state.position.y());
 
-            for (size_t i = 0; i < global_path_.size(); ++i) {
-                double dist_sq = (global_path_[i].position - current_vehicle_pos).squaredNorm();
-                if (dist_sq < min_dist_sq) {
-                    min_dist_sq = dist_sq;
-                    closest_idx = i;
-                }
-            }
-
-            // Lookahead Distance를 고려하여 글로벌 경로에서 일정 길이의 로컬 궤적 추출
-            trajectory_points_.clear();
-            double accumulated_s = 0.0;
-            // global_path_가 순환 경로라고 가정하고, closest_idx부터 시작하여 lookahead_distance_ 만큼의 경로를 추출
-            // 트랙이 닫힌 루프 형태임을 감안하여 순환적으로 접근 (modulo 연산 사용)
-            for (size_t i = 0; i < global_path_.size(); ++i) {
-                // closest_idx부터 시작하여 global_path_를 순환적으로 탐색
-                size_t current_path_idx = (closest_idx + i) % global_path_.size();
-                trajectory_points_.push_back(global_path_[current_path_idx]);
-
-                // 첫 번째 포인트 이후부터 거리 누적
-                if (i > 0) {
-                    accumulated_s += (trajectory_points_[i].position - trajectory_points_[i-1].position).norm();
-                }
-
-                // 누적 거리가 lookahead_distance_를 넘으면 추출 중단
-                if (accumulated_s >= planning_params_->lookahead_distance_) {
-                    break;
-                }
-                // (선택적) trajectory_points_에 충분한 점이 없다면 global_path_를 더 길게 탐색하도록 할 수 있으나
-                // 여기서는 lookahead_distance_ 내의 점들만 추출
-            }
-            
-            if (trajectory_points_.empty()) {
-                ROS_WARN("FormulaAutonomousSystem: Global path is too short or empty for RACING mode. Using stop trajectory.");
-                trajectory_points_ = trajectory_generator_->generateStopTrajectory();
-            }
-
-            // 추출된 로컬 궤적은 이미 글로벌 경로에서 계산된 속도 프로파일을 가지고 있음.
-            // 필요하다면 여기서 추가적인 속도 조정 (예: 현재 차량 속도에 따른 가감속 여유) 가능.
+            is_global_path_generated_ = true;
+            current_mode_ = DrivingMode::RACING;
+            ROS_INFO("FormulaAutonomousSystem: Global Path generated with %zu points. Switched to RACING mode!", global_path_.size());
 
         } else {
-            ROS_WARN("RACING mode is active, but global path is not ready. Using stop trajectory as fallback.");
-            trajectory_points_ = trajectory_generator_->generateStopTrajectory(); // 폴백: 정지 궤적
+            ROS_ERROR("FormulaAutonomousSystem: Global Path generation failed. Staying in MAPPING mode.");
         }
     }
 }
 
 /**
- * @brief 1랩 주행이 완료되면 MapManager의 정보를 바탕으로 글로벌 경로를 생성합니다.
- * 생성된 경로는 `global_path_`에 저장됩니다.
+ * @brief Defines the start/finish line using four orange cones.
  */
-void FormulaAutonomousSystem::generateGlobalPath() {
-    global_path_.clear();
-
-    // MapManager에서 정제된 좌/우 차선 포인트를 가져옵니다.
-    auto lanes = map_manager_->getTrackLanes();
-    const auto& left_lane = lanes.first;
-    const auto& right_lane = lanes.second;
-
-    // 양쪽 차선이 충분한 포인트 수를 가지고 있는지 확인합니다.
-    if (left_lane.empty() || right_lane.empty() || left_lane.size() < 2 || right_lane.size() < 2) {
-        ROS_WARN("FormulaAutonomousSystem: Cannot generate global path. Not enough lane points from MapManager.");
-        return;
-    }
-
-    // 1. 좌/우 차선을 기반으로 트랙의 중심선을 생성합니다.
-    std::vector<Eigen::Vector2d> center_points;
-    // ✨ 핵심 개선: 좌우 차선점 재매칭 로직
-    // 짧은 차선 기준으로 긴 차선의 가장 가까운 점을 찾아서 매칭
-    const auto* shorter_lane = &left_lane;
-    const auto* longer_lane = &right_lane;
-    if (right_lane.size() < left_lane.size()) {
-        shorter_lane = &right_lane;
-        longer_lane = &left_lane;
-    }
-
-    for (const auto& shorter_point : *shorter_lane) {
-        double min_dist_sq = std::numeric_limits<double>::max();
-        Eigen::Vector2d matched_longer_point;
-        bool found_match = false;
-
-        for (const auto& longer_point : *longer_lane) {
-            double dist_sq = (shorter_point - longer_point).squaredNorm();
-            if (dist_sq < min_dist_sq) {
-                min_dist_sq = dist_sq;
-                matched_longer_point = longer_point;
-                found_match = true;
-            }
-        }
-        
-        // 매칭되는 점이 있으면 중심점 생성
-        if (found_match) {
-            Eigen::Vector2d mid_point = (shorter_point + matched_longer_point) * 0.5;
-            center_points.push_back(mid_point);
-        }
-    }
-    
-    // 이 로그를 추가하여 중심선 포인트의 개수를 확인합니다.
-    ROS_INFO("Generated center points: %zu", center_points.size());
-
-
-    // 2. 생성된 중심선을 파라메트릭 스플라인으로 부드럽게 만듭니다.
-    // (TrajectoryGenerator::generateTrajectory와 유사한 스플라인 로직)
-    if (center_points.size() >= 2) { // 2점 이상이어야 스플라인이 의미 있음
-        std::vector<double> s_pts, x_pts, y_pts;
-        s_pts.push_back(0.0);
-        x_pts.push_back(center_points[0].x());
-        y_pts.push_back(center_points[0].y());
-
-        for (size_t i = 1; i < center_points.size(); ++i) {
-            double dist = (center_points[i] - center_points[i - 1]).norm();
-            double new_s = s_pts.back() + dist;
-            // s 값은 엄격하게 증가해야 스플라인이 안정적임. 같은 위치의 점 방지
-            if (new_s <= s_pts.back()) {
-                new_s = s_pts.back() + 0.01; 
-            }
-            s_pts.push_back(new_s);
-            x_pts.push_back(center_points[i].x());
-            y_pts.push_back(center_points[i].y());
-        }
-        
-        // 스플라인 생성 시 최소 3개의 포인트가 필요함을 고려
-        if (s_pts.size() < 3) {
-            ROS_WARN("FormulaAutonomousSystem: Not enough points for spline generation. Global path will be linear.");
-            // 2점 이하일 경우 스플라인 대신 선형 보간 로직 추가 가능 (선택적)
-            for (size_t i = 0; i < center_points.size(); ++i) {
-                global_path_.emplace_back(center_points[i].x(), center_points[i].y(), 
-                                           0.0, 0.0, planning_params_->default_speed_, s_pts[i]);
-            }
-            return;
-        }
-
-        tk::spline spline_x, spline_y;
-        spline_x.set_points(s_pts, x_pts);
-        spline_y.set_points(s_pts, y_pts);
-
-        // 3. 스플라인에서 최종 글로벌 경로(`global_path_`)를 샘플링하고 속도 프로파일을 할당합니다.
-        double total_length = s_pts.back();
-        double sampling_interval = 0.5; // 0.5m 간격으로 샘플링
-
-        for (double s = 0; s < total_length; s += sampling_interval) {
-            double x = spline_x(s);
-            double y = spline_y(s);
-
-            double dx = spline_x.deriv(1, s);
-            double dy = spline_y.deriv(1, s);
-            double yaw = std::atan2(dy, dx);
-
-            double ddx = spline_x.deriv(2, s);
-            double ddy = spline_y.deriv(2, s);
-            // 곡률 공식: |dx * ddy - dy * ddx| / (dx^2 + dy^2)^(3/2)
-            double curvature_denominator = std::pow(dx * dx + dy * dy, 1.5);
-            double curvature = (curvature_denominator < 1e-6) ? 0.0 : std::abs(dx * ddy - dy * ddx) / curvature_denominator;
-
-            // 곡률 기반 속도 계획 (planning_params_ 사용)
-            double desired_speed = planning_params_->max_speed_ / (1.0 + planning_params_->curvature_gain_ * std::abs(curvature));
-            double target_speed = std::max(planning_params_->min_speed_, std::min(desired_speed, planning_params_->max_speed_));
-
-            global_path_.emplace_back(x, y, yaw, curvature, target_speed, s);
-        }
-        // 마지막 포인트 추가 (샘플링 간격으로 인해 끝점이 잘릴 수 있으므로, 마지막 중심점 추가)
-        if (!center_points.empty() && (global_path_.empty() || (global_path_.back().position - center_points.back()).norm() > sampling_interval * 0.5 )) {
-             // 마지막 중심점의 yaw와 curvature를 대략적으로 계산하여 추가
-             double last_yaw = 0.0, last_curvature = 0.0;
-             if (total_length > 0) { // total_length가 0이 아닐 때만 미분값 계산
-                 double final_dx = spline_x.deriv(1, total_length);
-                 double final_dy = spline_y.deriv(1, total_length);
-                 last_yaw = std::atan2(final_dy, final_dx);
-
-                 double final_ddx = spline_x.deriv(2, total_length);
-                 double final_ddy = spline_y.deriv(2, total_length);
-                 double final_curvature_denominator = std::pow(final_dx * final_dx + final_dy * final_dy, 1.5);
-                 last_curvature = (final_curvature_denominator < 1e-6) ? 0.0 : std::abs(final_dx * final_ddy - final_ddy * final_ddx) / final_curvature_denominator;
-             }
-             double final_speed = planning_params_->max_speed_ / (1.0 + planning_params_->curvature_gain_ * std::abs(last_curvature));
-             final_speed = std::max(planning_params_->min_speed_, std::min(final_speed, planning_params_->max_speed_));
-
-             global_path_.emplace_back(center_points.back().x(), center_points.back().y(), 
-                                       last_yaw, last_curvature, final_speed, total_length);
-        }
-
-    } else {
-        ROS_WARN("FormulaAutonomousSystem: Not enough center points to generate smooth global path.");
-    }
-
-    if (!global_path_.empty()) {
-        ROS_INFO("FormulaAutonomousSystem: Global Path generated successfully with %zu points.", global_path_.size());
-    } else {
-        ROS_ERROR("FormulaAutonomousSystem: Failed to generate Global Path.");
-    }
-}
-
-/**
- * @brief 시작/결승선을 정의합니다. 첫 랩 동안 맵 매니저가 축적한 콘들을 기반으로 합니다.
- * FSDS 규정에 따라 Start/Finish Line은 보통 주황색 콘으로 정의됩니다.
- * 가장 가까운 두 개의 주황색 콘을 찾아 시작/결승선으로 정의합니다.
- * @param global_cones 전역 맵에 있는 모든 콘
- */
-void FormulaAutonomousSystem::defineStartFinishLine(const std::vector<Cone>& global_cones) {
-    if (global_cones.empty()) return;
+void FormulaAutonomousSystem::defineStartFinishLine(const std::vector<Cone>& cones) {
 
     std::vector<Eigen::Vector2d> orange_cones;
-    for (const auto& cone : global_cones) {
-        if (cone.color == "orange") {
+
+    for (const auto& cone : cones) {
+        if (cone.color == "orange" && cone.center.x > 0 && cone.center.x < 15.0) { // 전방 15m 이내 주황 콘
             orange_cones.emplace_back(cone.center.x, cone.center.y);
         }
     }
 
-    // 최소 2개의 주황색 콘이 있어야 시작/결승선 정의 가능
-    if (orange_cones.size() >= 2) {
-        // --- 아이디어: 트랙 폭(planning_params_->min_y_separation)을 고려하여
-        //              x좌표가 어느 정도 비슷하면서 y좌표가 크게 차이나는 두 콘을 찾는 것이 더 정확
-        //              여기서는 가장 가까운 두 콘을 찾는 것으로 단순화되어 있음 ---
-
-        // 두 콘을 선택하는 기준: x좌표가 비슷하고 y좌표 차이가 큰 (트랙 폭에 가까운) 두 콘
-        // 또는 특정 ROI 내의 주황색 콘 쌍을 찾는 로직
-        Eigen::Vector2d p1_sf = orange_cones[0];
-        Eigen::Vector2d p2_sf = orange_cones[1];
-        double max_y_diff = -1.0; // y축 차이가 가장 큰 두 콘을 찾기 위함
-
-        for (size_t i = 0; i < orange_cones.size(); ++i) {
-            for (size_t j = i + 1; j < orange_cones.size(); ++j) {
-                // x좌표가 크게 다르지 않으면서 y좌표 차이가 큰 두 콘을 찾음
-                // planning_params_->min_y_separation_은 트랙 폭으로 사용될 수 있음
-                // planning_params_->max_x_separation_은 시작/결승선 콘의 x축 오차 허용 범위
-                if (std::abs(orange_cones[i].x() - orange_cones[j].x()) < planning_params_->max_x_separation_ &&
-                    std::abs(orange_cones[i].y() - orange_cones[j].y()) > max_y_diff) {
-                    
-                    max_y_diff = std::abs(orange_cones[i].y() - orange_cones[j].y());
-                    p1_sf = orange_cones[i];
-                    p2_sf = orange_cones[j];
-                }
-            }
-        }
-        
-        // 두 콘의 중간 지점을 시작/결승선 중심으로 설정
-        start_finish_line_center_ = (p1_sf + p2_sf) * 0.5;
-        // 두 콘을 잇는 선의 수직 방향을 시작/결승선 yaw로 설정
-        // 트랙이 x축 방향으로 진행한다고 가정하고, y축 방향 벡터의 역방향이 라인 노멀이 됨
-        start_finish_line_yaw_ = std::atan2(p2_sf.x() - p1_sf.x(), -(p2_sf.y() - p1_sf.y())); // p1->p2 벡터의 수직 방향
-        
-        is_start_finish_line_defined_ = true;
-        ROS_INFO("FormulaAutonomousSystem: Start/Finish Line defined at (%.2f, %.2f) with yaw %.2f rad.", 
-                 start_finish_line_center_.x(), start_finish_line_center_.y(), start_finish_line_yaw_);
-    } else {
-        ROS_WARN("FormulaAutonomousSystem: Not enough orange cones to define Start/Finish Line. Need at least 2.");
-        is_start_finish_line_defined_ = false;
+    if (orange_cones.size() < 4) {
+        return; // Not enough orange cones detected yet.
     }
+
+    // Sort cones by y-coordinate to separate left and right pairs
+    std::sort(orange_cones.begin(), orange_cones.end(), [](const Eigen::Vector2d& a, const Eigen::Vector2d& b) {
+        return a.y() > b.y(); // y가 큰 쪽이 왼쪽
+    });
+
+    // The two cones with the largest y are left, the two with the smallest y are right.
+    Eigen::Vector2d left_midpoint = (orange_cones[0] + orange_cones[1]) / 2.0;
+    Eigen::Vector2d right_midpoint = (orange_cones[orange_cones.size()-1] + orange_cones[orange_cones.size()-2]) / 2.0;
+
+    // The center of the start line is the midpoint of the two midpoints.
+    start_finish_line_center_ = (left_midpoint + right_midpoint) / 2.0;
+
+    // The direction vector of the line goes from right to left.
+    start_finish_line_direction_ = (left_midpoint - right_midpoint).normalized();
+
+    // The yaw of the line is perpendicular to its direction.
+    start_finish_line_yaw_ = std::atan2(start_finish_line_direction_.y(), start_finish_line_direction_.x()) - M_PI / 2.0;
+    is_start_finish_line_defined_ = true;
+    just_crossed_line_ = true; // IMPORTANT: Prevent counting the first pass right after starting.
+    current_lap_ = 1;
+    ROS_INFO("FormulaAutonomousSystem: Start/Finish line defined at (%.2f, %.2f) with direction (%.2f, %.2f)",
+             start_finish_line_center_.x(), start_finish_line_center_.y(),
+             start_finish_line_direction_.x(), start_finish_line_direction_.y());
 }
 
 /**
- * @brief 차량이 시작/결승선을 통과했는지 확인하고 랩 카운트를 업데이트합니다.
- * @param current_state 현재 차량의 상태 (전역 좌표계)
+ * @brief Updates the lap count when the vehicle crosses the start/finish line.
  */
-// formula_autonomous_system.cpp
-// formula_autonomous_system.cpp
 void FormulaAutonomousSystem::updateLapCount(const VehicleState& current_state) {
-    if (!is_start_finish_line_defined_) {
-        ROS_INFO_THROTTLE(5.0, "Start/Finish line is not yet defined. Lap counting is on hold.");
+
+    Eigen::Vector2d car_position_vec(current_state.position.x(), current_state.position.y());
+
+    // Vector from the line center to the car
+    Eigen::Vector2d vec_to_car = car_position_vec - start_finish_line_center_;
+    // Normal vector to the line (points in the direction of travel)
+    Eigen::Vector2d line_normal(-start_finish_line_direction_.y(), start_finish_line_direction_.x());
+
+    // Project the vector to the car onto the normal vector to find out which side of the line we are on.
+    double previous_position_relative = vehicle_position_relative_to_line_;
+    vehicle_position_relative_to_line_ = vec_to_car.dot(line_normal);
+
+    // Check for sign change (crossing the line)
+    // We crossed if the product of the previous and current relative positions is negative.
+    if (previous_position_relative > 0 && vehicle_position_relative_to_line_ <= 0) {
+
+        if (!just_crossed_line_) {
+            current_lap_++;
+            just_crossed_line_ = true; // Set flag to prevent double counting
+            ROS_INFO("================================================");
+            ROS_INFO("FormulaAutonomousSystem: Crossed line! New Lap: %d", current_lap_);
+            ROS_INFO("================================================");
+        }
+    }
+
+    // Reset the 'just_crossed_line_' flag only when the car is far away from the line on the "after" side.
+    // This prevents re-triggering if the car wiggles across the line.
+    double dist_from_line_center = (car_position_vec - start_finish_line_center_).norm();
+
+    if (just_crossed_line_ && dist_from_line_center > 10.0) { // 10m 이상 멀어지면 리셋
+        just_crossed_line_ = false;
+    }
+}
+
+void FormulaAutonomousSystem::generateGlobalPath() {
+    global_path_.clear();
+
+    auto track_lanes = map_manager_->getTrackLanes();
+
+    const auto& left_lane = track_lanes.first;
+    const auto& right_lane = track_lanes.second;
+
+    if (left_lane.size() < 2 || right_lane.size() < 2) {
+        ROS_ERROR("MapManager: Not enough lane points to generate a global path.");
         return;
     }
 
-    // [수정된 부분] previous_position_가 (0,0)이면 첫 실행으로 간주하고 현재 위치로 초기화
-    // .squaredNorm()은 벡터의 길이 제곱을 계산하며, (0,0)일 때만 0이 됩니다.
-    if (previous_position_.squaredNorm() == 0.0) {
-        previous_position_ = current_state.position;
-        last_lap_crossing_time_ = std::chrono::steady_clock::now(); // 타이머도 함께 초기화
-        ROS_INFO("Lap counter initialized. previous_position set to (%.2f, %.2f)", previous_position_.x(), previous_position_.y());
+    std::vector<Eigen::Vector2d> center_points;
+
+    // For each point on the left lane, find the closest point on the right lane
+    for (const auto& left_point : left_lane) {
+
+        auto closest_right_it = std::min_element(right_lane.begin(), right_lane.end(),
+            [&](const Eigen::Vector2d& a, const Eigen::Vector2d& b) {
+                return (a - left_point).squaredNorm() < (b - left_point).squaredNorm();
+            });
+
+        // Calculate the midpoint
+        Eigen::Vector2d center_point = (*closest_right_it + left_point) / 2.0;
+
+        if (center_points.empty() || (center_points.back() - center_point).norm() > 0.1) {
+            center_points.push_back(center_point);
+        }
+    }
+
+    if (center_points.size() < 3) { // Need at least 3 points to calculate reliable vectors
+        ROS_ERROR("MapManager: Failed to generate sufficient center points for the global path.");
         return;
     }
 
-    // 통과 간 최소 시간 설정 (예: 5초, 동일 랩에서 중복 카운팅 방지)
-    const double min_crossing_interval_sec = 5.0;
-    auto current_time = std::chrono::steady_clock::now();
-    std::chrono::duration<double> time_since_last_crossing = current_time - last_lap_crossing_time_;
+    // Convert center points to TrajectoryPoint format, now including yaw calculation
+    double accumulated_s = 0.0;
 
-    // 결승선 통과 감지 거리 설정 (결승선 중심으로부터의 최대 거리)
-    const double line_crossing_threshold_dist = planning_params_->max_x_separation_ * 2.0;
+    for (size_t i = 0; i < center_points.size(); ++i) {
 
-    // 1. 결승선 라인에 수직인 벡터(노멀 벡터) 계산
-    double line_normal_x = std::cos(start_finish_line_yaw_);
-    double line_normal_y = std::sin(start_finish_line_yaw_);
-    Eigen::Vector2d line_normal(line_normal_x, line_normal_y);
+        double yaw = 0.0;
 
-    // 2. 현재 위치와 이전 위치의 결승선 라인에 대한 상대적 위치 계산
-    Eigen::Vector2d current_vec = current_state.position - start_finish_line_center_;
-    Eigen::Vector2d prev_vec = previous_position_ - start_finish_line_center_;
+        // Calculate the direction vector (tangent) for each point
+        if (i > 0 && i < center_points.size() - 1) {
 
-    // 내적(dot product)을 통해 차량이 라인 앞/뒤 중 어디에 있는지 판별 (+는 앞, -는 뒤)
-    double current_dot_product = current_vec.dot(line_normal);
-    double prev_dot_product = prev_vec.dot(line_normal);
+            // For intermediate points, use the vector from the previous to the next point
+            Eigen::Vector2d tangent = center_points[i+1] - center_points[i-1];
+            yaw = std::atan2(tangent.y(), tangent.x());
 
-    // 차량의 주행 방향이 결승선 통과 방향과 일치하는지 확인
-    Eigen::Vector2d velocity_vector(std::cos(current_state.yaw), std::sin(current_state.yaw));
-    double velocity_dot_product = velocity_vector.dot(line_normal);
+        } else if (i == 0) {
 
-    // [디버깅 로그 추가]
-    ROS_INFO_THROTTLE(1.0, "[Lap Check] Dist: %.2f | PrevDot: %.2f | CurrDot: %.2f | TimeSince: %.2f | VelDot: %.2f",
-        current_vec.norm(), prev_dot_product, current_dot_product, time_since_last_crossing.count(), velocity_dot_product);
+            // For the first point, use the vector to the second point
+            Eigen::Vector2d tangent = center_points[1] - center_points[0];
+            yaw = std::atan2(tangent.y(), tangent.x());
 
-    // 3. 랩 통과 조건 검사
-    if (current_vec.norm() < line_crossing_threshold_dist) { // 조건 1: 결승선 근처에 있는가?
-        if (current_dot_product > 0 && prev_dot_product <= 0) { // 조건 2: 라인을 뒤에서 앞으로 통과했는가?
-            if (time_since_last_crossing.count() > min_crossing_interval_sec) { // 조건 3: 마지막 통과 후 충분한 시간이 지났는가?
-                if (velocity_dot_product > 0.1) { // 조건 4: 정방향으로 주행 중인가?
-                    current_lap_++;
-                    last_lap_crossing_time_ = current_time;
-                    ROS_INFO("==============================================");
-                    ROS_INFO("LAP %d PASSED!", current_lap_ -1);
-                    ROS_INFO("LAP %d STARTED!", current_lap_);
-                    ROS_INFO("==============================================");
-                }
-            }
+        } else { // i == center_points.size() - 1
+
+            // For the last point, use the vector from the second to last point
+            Eigen::Vector2d tangent = center_points.back() - center_points[center_points.size() - 2];
+            yaw = std::atan2(tangent.y(), tangent.x());
         }
+
+        if (i > 0) {
+            accumulated_s += (center_points[i] - center_points[i-1]).norm();
+        }
+
+        // Store the point with its calculated position and direction (yaw)
+        global_path_.emplace_back(center_points[i].x(), center_points[i].y(), yaw, 0.0, 0.0, accumulated_s);
     }
 
-    // 다음 프레임 계산을 위해 현재 위치를 이전 위치로 업데이트
-    previous_position_ = current_state.position;
+    // To make it a closed loop, update the first and last points' yaw for a smooth transition
+    Eigen::Vector2d final_tangent = global_path_[1].position - global_path_.back().position;
+    global_path_.back().yaw = std::atan2(final_tangent.y(), final_tangent.x());
+    global_path_.front().yaw = global_path_.back().yaw; // Make the start and end yaws match
 }
-/*void FormulaAutonomousSystem::setRacingStrategy(const VehicleState& vehicle_state, const std::vector<Cone>& cones_for_planning) {
-    // 1. Lap Counting & Mode Switching Logic
-    if (!is_start_finish_line_defined_) {
-        defineStartFinishLine(cones_for_planning);
-    }
-    if (is_start_finish_line_defined_) {
-        updateLapCount(vehicle_state); // current_lap_ is updated inside
-    }
-    // 2. Trajectory Planning based on Driving Mode
-    if (current_mode_ == DrivingMode::MAPPING) {
-        // In mapping mode, we do not generate a global path
-        trajectory_points_ = trajectory_generator_->generateTrajectory(cones_for_planning, planning_state_);
-
-        // Switch to RACING mode after completing the first lap
-        if (current_lap_ > 1 && !is_global_path_generated_) {
-            ROS_INFO("Lap 1 finished. Generating Global Path and switching to RACING mode...");
-            generateGlobalPath();
-            is_global_path_generated_ = true;
-            current_mode_ = DrivingMode::RACING;
-            ROS_INFO("Switched to RACING mode!");
-        }
-
-    } else {
-        // In racing mode, follow the global path
-        if (!global_path_.empty()) {
-            // TODO: (다음 단계에서 구현) 전역 경로에서 현재 주행에 필요한 부분을 추출
-            // trajectory_points_ = trajectory_generator_->getTrajectoryFromGlobalPath(vehicle_state, global_path_);
-            trajectory_points_ = trajectory_generator_->generateTrajectory(cones_for_planning, planning_state_); // 임시
-        } else {
-            ROS_WARN("RACING mode is active, but global path is not ready. Using local planner as fallback.");
-            trajectory_points_ = trajectory_generator_->generateTrajectory(cones_for_planning, planning_state_);
-        }
-    }
-}
-*/
