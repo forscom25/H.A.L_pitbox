@@ -83,7 +83,7 @@ perception:
     bilateral_filter_diameter: 9
 
   camera_hsv_window_size:
-    window_size: 20
+    window_size: 15
 
   # HSV thresholds for yellow cone detection
   camera_hsv_yellow:
@@ -130,7 +130,7 @@ mapping:
   cone_memory_association_threshold: 1.0
 
   # Cone sorting parameters for lane generation
-  max_connection_distance: 10.0
+  max_connection_distance: 15.0
   direction_weight: 0.5 # Path direction consistency weight (0.0 ~1.0)
 
   # Cone map refinement parameters
@@ -144,7 +144,7 @@ planning:
     # Basic trajectory generation
     lookahead_distance: 20.0
     waypoint_spacing: 0.5
-    default_speed: 3.0
+    default_speed: 3.0 # StopTrajectory
     
     # Cone-based path planning (meters)
     max_cone_distance: 25.0
@@ -182,16 +182,17 @@ control:
 
   Stanley:
     k_gain: 0.7
+    k_gain_curvature_boost: 1.5
 
   # PID Speed Control Parameters
   SpeedControl:
-    pid_kp: 0.5
-    pid_ki: 0.01
-    pid_kd: 0.02
-    max_throttle: 0.6
+    pid_kp: 0.3
+    pid_ki: 0.0
+    pid_kd: 0.01
+    max_throttle: 0.4
 
-    # Gain for steering-based speed dampening. Higher value means more aggressive slowing on turns.
-    steering_based_speed_gain: 0.2
+    # Steering-based speed dampening gain
+    steering_based_speed_gain: 0.0 # Higher value means more aggressive slowing on turns.
 
   Vehicle:
     wheel_base: 1.55
