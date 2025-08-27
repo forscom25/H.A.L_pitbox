@@ -1325,7 +1325,7 @@ struct MappingParams {
     double cone_memory_association_threshold_;      // Minimum association confidence to consider a match
     double max_connection_distance_;                // Maximum distance to connect cones (m)
     double direction_weight_;                       // Weight for direction consistency in cone sorting
-    double max_dist_from_lane_; // Maximum distance from lane to consider a cone valid (m)
+    double max_dist_from_lane_;                     // Maximum distance from lane to consider a cone valid (m)
     
     // Print parameters for debugging
     void print() const {
@@ -1416,7 +1416,8 @@ struct ControlParams {
     double pp_max_steer_angle_;       // maximum steering angle (radians)
 
     // ===================  Stanley Controller Parameters =================== 
-    double stanley_k_gain_; // Stanley controller gain k
+    double k_gain_; // Stanley controller gain k
+    double k_gain_curvature_boost_; // k boost depending on curvature
 
     // =================== Longitudinal Control: PID Controller ===================
     double pid_kp_;                    // proportional gain
@@ -1439,7 +1440,8 @@ struct ControlParams {
         if(!pnh.getParam("/control/PurePursuit/max_steer_angle", pp_max_steer_angle_)){std::cerr<<"Param control/PurePursuit/max_steer_angle has error" << std::endl; return false;}
 
         // ===================  Stanley Controller Parameters =================== 
-        if(!pnh.getParam("/control/Stanley/k_gain", stanley_k_gain_)){std::cerr<<"Param control/Stanley/k_gain has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/Stanley/k_gain", k_gain_)){std::cerr<<"Param control/Stanley/k_gain has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/Stanley/k_gain_curvature_boost", k_gain_curvature_boost_)){std::cerr<<"Param control/Stanley/k_gain_curvature_boost has error" << std::endl; return false;}
         
         // =================== Longitudinal Control: PID Controller ===================
         if(!pnh.getParam("/control/SpeedControl/pid_kp", pid_kp_)){std::cerr<<"Param control/SpeedControl/pid_kp has error" << std::endl; return false;}
@@ -1447,7 +1449,6 @@ struct ControlParams {
         if(!pnh.getParam("/control/SpeedControl/pid_kd", pid_kd_)){std::cerr<<"Param control/SpeedControl/pid_kd has error" << std::endl; return false;}
         if(!pnh.getParam("/control/SpeedControl/max_throttle", max_throttle_)){std::cerr<<"Param control/SpeedControl/max_throttle has error" << std::endl; return false;}
         if(!pnh.getParam("/control/SpeedControl/steering_based_speed_gain", steering_based_speed_gain_)){std::cerr<<"Param control/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
-
 
         if(!pnh.getParam("/control/Vehicle/wheel_base", vehicle_length_)){std::cerr<<"Param control/Vehicle/wheel_base has error" << std::endl; return false;}
         
@@ -1750,14 +1751,17 @@ public:
     explicit TrajectoryGenerator(const std::shared_ptr<PlanningParams>& params);
     ~TrajectoryGenerator() = default;
     
-    // Generate trajectory from cones and current planning state
-    std::vector<TrajectoryPoint> generateTrajectory(const std::vector<Cone>& cones, ASState planning_state);
+    // Generate trajectory from cones and current planning state(for Mapping mode)
+    std::vector<TrajectoryPoint> generateTrajectoryFromCones(const std::vector<Cone>& cones, ASState planning_state);
+    // Generate local trajectory by following the global path (for RACING mode)
+    std::vector<TrajectoryPoint> getTrajectoryFromGlobalPath(const VehicleState& vehicle_state, const std::vector<TrajectoryPoint>& global_path);
 
     /**
      * @brief Get last generated trajectory
      * @return Last trajectory
      */
     const std::vector<TrajectoryPoint>& getLastTrajectory() const { return last_trajectory_; }
+    const std::vector<Eigen::Vector2d>& getLastLocalPathPoints() const { return last_local_path_points_; }
 
     /**
      * @brief Update trajectory parameters
@@ -1772,8 +1776,6 @@ public:
      */
     void printTrajectoryStats() const;
 
-    
-
 private:
     // Utility functions
     double calculateCurvature(const tk::spline& s, double x);
@@ -1784,6 +1786,7 @@ private:
     // Member variables
     std::shared_ptr<PlanningParams> params_;
     std::vector<TrajectoryPoint> last_trajectory_;
+    std::vector<Eigen::Vector2d> last_local_path_points_;
     
     // Statistics
     int generated_trajectories_;
@@ -1825,6 +1828,7 @@ public:
 
 private:
     std::shared_ptr<ControlParams> params_;
+    mutable double last_filtered_steering_angle_ = 0.0;
 };
 
 /**
@@ -1901,6 +1905,14 @@ public:
         }
         return {};
     }
+    Eigen::Vector2d getStartFinishLineCenter() const { return start_finish_line_center_; }
+    Eigen::Vector2d getStartFinishLineDirection() const { return start_finish_line_direction_; }
+    bool isStartFinishLineDefined() const { return is_start_finish_line_defined_; }
+
+    // Globalpath
+    std::vector<TrajectoryPoint> getGlobalPath() const { return global_path_; }
+    bool isGlobalPathGenerated() const { return is_global_path_generated_; }
+    const std::unique_ptr<TrajectoryGenerator>& getTrajectoryGenerator() const { return trajectory_generator_; }
 
     private: // Main thread
 
@@ -1951,9 +1963,11 @@ private:
     DrivingMode current_mode_;
     int current_lap_;
     Eigen::Vector2d start_finish_line_center_;
+    Eigen::Vector2d start_finish_line_direction_;
     double start_finish_line_yaw_;
     bool is_start_finish_line_defined_;
     bool just_crossed_line_;
+    double vehicle_position_relative_to_line_;
 
     // Trajectory planning
     std::shared_ptr<PlanningParams> planning_params_;
