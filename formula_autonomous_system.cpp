@@ -609,42 +609,9 @@ cv::Mat ColorDetection::preprocessImage(const cv::Mat& rgb_image) {
     if (!params_->camera_enable_preprocessing_) {
         return rgb_image;
     }
-
+    
     cv::Mat processed = rgb_image.clone();
-
-    // =================================================================
-    // ============[악천후 대비 코드: 감마 보정 + CLAHE 대비 향상]========
-    // =================================================================
-    if (processed.channels() == 3) {
-        // 1. 감마 보정 (Gamma Correction)으로 이미지 밝기 조절
-        cv::Mat lookUpTable(1, 256, CV_8U);
-        uchar* p = lookUpTable.ptr();
-        double gamma = 1.8; // 1.0보다 크면 이미지가 어두워지고, 작으면 밝아짐. 안개 환경에서는 1.5~2.0 추천
-        for( int i = 0; i < 256; ++i)
-            p[i] = cv::saturate_cast<uchar>(pow(i / 255.0, gamma) * 255.0);
-        cv::LUT(processed, lookUpTable, processed);
-
-        // 2. CLAHE를 이용한 대비 향상
-        cv::Mat lab_image;
-        cv::cvtColor(processed, lab_image, cv::COLOR_BGR2Lab);
-
-        std::vector<cv::Mat> lab_planes(3);
-        cv::split(lab_image, lab_planes);
-
-        cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE();
-        clahe->setClipLimit(3.0);
-        clahe->setTilesGridSize(cv::Size(8, 8));
-
-        cv::Mat dst;
-        clahe->apply(lab_planes[0], dst);
-
-        dst.copyTo(lab_planes[0]);
-        cv::merge(lab_planes, lab_image);
-
-        cv::cvtColor(lab_image, processed, cv::COLOR_Lab2BGR);
-    }
-  
-
+    
     // Apply Gaussian blur for noise reduction
     if (params_->camera_gaussian_blur_sigma_ > 0) {
         int kernel_size = static_cast<int>(2 * params_->camera_gaussian_blur_sigma_ * 3 + 1);
