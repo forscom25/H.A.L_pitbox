@@ -71,8 +71,9 @@ bool FormulaAutonomousSystemNode::init(){
     lap_count_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lap_count_marker", 1);
     global_cones_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/global_cones_marker", 1);
     lane_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lane_marker", 1);
-    finish_line_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/finish_line_marker", 1); // 추가
-    global_path_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/global_path_marker", 1); // 추가
+    global_path_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("/fsds/global_path", 1);                                // Globalpath
+    trajectory_from_global_path_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("/fsds/trajectory_from_global_path", 1); // TrajectoryFromGlobalpath
+    curvature_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/curvature_marker", 1);
     // Get parameters
     pnh_.getParam("/system/main_loop_rate", main_loop_rate_);
 
@@ -148,8 +149,10 @@ void FormulaAutonomousSystemNode::publish(){
     publishCenterLineMarker();
     publishGlobalConesMarker();
     publishLaneMarker();
-    publishGlobalPathMarker();   // 추가
-    publishFinishLineMarker(); // 추가
+    publishStartFinishLineMarker();
+    publishGlobalPathMarker();                  // Globalpath
+    publishTrajectoryFromGlobalPathMarker();    // TrajectoryFromGlobalpath
+    publishCurvatureMarker();
     return;
 }
 
@@ -535,6 +538,177 @@ void FormulaAutonomousSystemNode::publishLaneMarker() {
     lane_marker_pub_.publish(marker_array);
 }
 
+// For lap counting
+
+
+
+void FormulaAutonomousSystemNode::publishStartFinishLineMarker() {
+
+    if (!formula_autonomous_system_->isStartFinishLineDefined()) {
+        return;
+    }
+    
+    // Get the current timestamp from a reliable source
+    imu_msg_mutex_.lock();
+    ros::Time current_stamp = imu_msg_.header.stamp;
+    imu_msg_mutex_.unlock();
+
+    visualization_msgs::MarkerArray marker_array;
+
+    // --- 1. Line Marker (in "map" frame) ---
+    visualization_msgs::Marker line_marker;
+    line_marker.header.frame_id = "map";
+    line_marker.header.stamp = current_stamp;
+    line_marker.ns = "start_finish_line";
+    line_marker.id = 0;
+    line_marker.type = visualization_msgs::Marker::LINE_STRIP;
+    line_marker.action = visualization_msgs::Marker::ADD;
+    line_marker.lifetime = ros::Duration(0.2);
+    line_marker.pose.orientation.w = 1.0;
+
+    // MODIFIED: Make the line thicker and orange
+    line_marker.scale.x = 0.5; // <-- CHANGE: Increased thickness
+    line_marker.color.r = 1.0; // Orange
+    line_marker.color.g = 0.5; // Orange
+    line_marker.color.b = 0.0; // Orange
+    line_marker.color.a = 1.0;
+
+    Eigen::Vector2d center = formula_autonomous_system_->getStartFinishLineCenter();
+    Eigen::Vector2d dir = formula_autonomous_system_->getStartFinishLineDirection();
+
+    double track_width = 7.0;
+
+    geometry_msgs::Point p1, p2;
+    p1.x = center.x() - dir.x() * track_width / 2.0;
+    p1.y = center.y() - dir.y() * track_width / 2.0;
+    p1.z = 0.1;
+
+    p2.x = center.x() + dir.x() * track_width / 2.0;
+    p2.y = center.y() + dir.y() * track_width / 2.0;
+    p2.z = 0.1;
+
+    line_marker.points.push_back(p1);
+    line_marker.points.push_back(p2);
+    marker_array.markers.push_back(line_marker);
+
+    // --- 2. Text Marker for Lap Count (in "fsds/FSCar" vehicle frame) ---
+    visualization_msgs::Marker text_marker;
+    text_marker.header.frame_id = "fsds/FSCar";
+    text_marker.header.stamp = current_stamp;
+    text_marker.ns = "lap_count_text";
+    text_marker.id = 1;
+    text_marker.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
+    text_marker.action = visualization_msgs::Marker::ADD;
+    text_marker.lifetime = ros::Duration(0.2);
+    text_marker.pose.position.x = 4.0;
+    text_marker.pose.position.y = 4.0;
+    text_marker.pose.position.z = 4.0;
+    text_marker.pose.orientation.w = 1.0;
+    text_marker.scale.z = 0.8;
+
+    // MODIFIED: Make the text green
+    text_marker.color.r = 0.0; // Green
+    text_marker.color.g = 1.0; // Green
+    text_marker.color.b = 0.0; // Green
+    text_marker.color.a = 1.0;
+
+    int total_laps = 10;
+    std::stringstream ss;
+    ss << "Lap: " << formula_autonomous_system_->getCurrentLap() << " / " << total_laps;
+    text_marker.text = ss.str();
+    marker_array.markers.push_back(text_marker);
+    lap_count_marker_pub_.publish(marker_array);
+}
+
+// Globalpath
+void FormulaAutonomousSystemNode::publishGlobalPathMarker() {
+
+    if (!formula_autonomous_system_->isGlobalPathGenerated()) {
+        return; // Don't publish if the path doesn't exist yet
+    }
+
+    auto global_path = formula_autonomous_system_->getGlobalPath();
+
+    if (global_path.empty()) {
+        return;
+    }
+
+    // Get header from a reliable source
+    imu_msg_mutex_.lock();
+    std_msgs::Header header = imu_msg_.header;
+    imu_msg_mutex_.unlock();
+    header.frame_id = "map"; // The global path is in the "map" frame
+    visualization_msgs::Marker path_marker;
+    path_marker.header = header;
+    path_marker.ns = "global_path";
+    path_marker.id = 0;
+    path_marker.type = visualization_msgs::Marker::LINE_STRIP;
+    path_marker.action = visualization_msgs::Marker::ADD;
+    path_marker.lifetime = ros::Duration(); // A duration of 0 means it persists forever
+    path_marker.pose.orientation.w = 1.0;
+    path_marker.scale.x = 0.15; // Line width
+    path_marker.color.r = 0.0;  // Cyan color for distinction
+    path_marker.color.g = 1.0;
+    path_marker.color.b = 1.0;
+    path_marker.color.a = 0.8;  // Slightly transparent
+
+    for (const auto& point : global_path) {
+
+        geometry_msgs::Point p;
+        p.x = point.position.x();
+        p.y = point.position.y();
+        p.z = 0.1; // Draw it slightly above the ground to avoid z-fighting
+        path_marker.points.push_back(p);
+    }
+
+    global_path_marker_pub_.publish(path_marker);
+}
+
+// GlobalpathTrajectory
+void FormulaAutonomousSystemNode::publishTrajectoryFromGlobalPathMarker() { 
+
+    if (!formula_autonomous_system_->isGlobalPathGenerated()) {
+        return;
+    }
+
+    auto local_points = formula_autonomous_system_->getTrajectoryGenerator()->getLastLocalPathPoints();
+
+    if (local_points.empty()) {
+        return;
+    }
+
+    imu_msg_mutex_.lock();
+    std_msgs::Header header = imu_msg_.header;
+    imu_msg_mutex_.unlock();
+    header.frame_id = "fsds/FSCar";
+    visualization_msgs::Marker points_marker;
+    points_marker.header = header;
+    points_marker.ns = "trajectory_from_global_path"; 
+    points_marker.id = 0;
+    points_marker.type = visualization_msgs::Marker::SPHERE_LIST;
+    points_marker.action = visualization_msgs::Marker::ADD;
+    points_marker.lifetime = ros::Duration(0.1);
+    points_marker.pose.orientation.w = 1.0;
+    points_marker.scale.x = 0.2;
+    points_marker.scale.y = 0.2;
+    points_marker.scale.z = 0.2;
+    points_marker.color.r = 1.0;
+    points_marker.color.g = 0.0;
+    points_marker.color.b = 0.0;
+    points_marker.color.a = 1.0;
+
+    for (const auto& point : local_points) {
+
+        geometry_msgs::Point p;
+        p.x = point.x();
+        p.y = point.y();
+        p.z = 0.2;
+        points_marker.points.push_back(p);
+    }
+
+    trajectory_from_global_path_marker_pub_.publish(points_marker); 
+}
+
 int main(int argc, char** argv){
     // Initialize ROS
     ros::init(argc, argv, "formula_autonomous_system");
@@ -547,94 +721,55 @@ int main(int argc, char** argv){
 
     return 0;
 }
-void FormulaAutonomousSystemNode::publishGlobalPathMarker(){
-    // 헤더 정보 가져오기
+// formula_autonomous_system_node.cpp 파일 맨 아래에 추가
+
+void FormulaAutonomousSystemNode::publishCurvatureMarker() {
+    // Get header
     lidar_msg_mutex_.lock();
     std_msgs::Header header = lidar_msg_.header;
     lidar_msg_mutex_.unlock();
-    header.frame_id = "map"; // 글로벌 맵은 "map" 프레임에 기반
-
-    visualization_msgs::Marker marker;
-    marker.header = header;
-    marker.ns = "global_path";
-    marker.id = 0;
-    marker.type = visualization_msgs::Marker::LINE_STRIP;
-    marker.action = visualization_msgs::Marker::ADD;
-    marker.lifetime = ros::Duration(0.1);
-    marker.pose.orientation.w = 1.0;
-    marker.scale.x = 0.2; // 라인 두께
-
-    // 글로벌 경로 데이터 가져오기
-    const auto& global_path = formula_autonomous_system_->getGlobalPath();
-
-    for(const auto& pt : global_path){
-        geometry_msgs::Point p;
-        p.x = pt.position.x();
-        p.y = pt.position.y();
-        p.z = 0.0;
-        marker.points.push_back(p);
-    }
-    
-    // 라인 색상 (예: 녹색)
-    marker.color.r = 0.0;
-    marker.color.g = 1.0;
-    marker.color.b = 0.0;
-    marker.color.a = 1.0;
-
-    // 경로가 비어있으면 마커를 제거
-    if (marker.points.empty()) {
-        marker.action = visualization_msgs::Marker::DELETE;
-    }
+    header.frame_id = "fsds/FSCar"; // 차량 기준 좌표계
 
     visualization_msgs::MarkerArray marker_array;
-    marker_array.markers.push_back(marker);
-    global_path_marker_pub_.publish(marker_array);
-}
-void FormulaAutonomousSystemNode::publishFinishLineMarker(){
-    // 헤더 정보 가져오기
-    lidar_msg_mutex_.lock();
-    std_msgs::Header header = lidar_msg_.header;
-    lidar_msg_mutex_.unlock();
-    header.frame_id = "map"; // map 프레임 기반
+    const auto& trajectory = formula_autonomous_system_->trajectory_points_;
 
-    // 피니시 라인 정보 가져오기
-    const Eigen::Vector2d& line_center = formula_autonomous_system_->getStartFinishLineCenter();
-    double line_yaw = formula_autonomous_system_->getStartFinishLineYaw();
+    int id = 0;
+    for (const auto& point : trajectory) {
+        visualization_msgs::Marker text_marker;
+        text_marker.header = header;
+        text_marker.ns = "curvature_text";
+        text_marker.id = id++;
+        text_marker.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
+        text_marker.action = visualization_msgs::Marker::ADD;
+        text_marker.lifetime = ros::Duration(0.1);
 
-    // 라인 시각화 마커 생성
-    visualization_msgs::Marker line_marker;
-    line_marker.header = header;
-    line_marker.ns = "finish_line";
-    line_marker.id = 0;
-    line_marker.type = visualization_msgs::Marker::LINE_STRIP;
-    line_marker.action = visualization_msgs::Marker::ADD;
-    line_marker.lifetime = ros::Duration(0.1);
-    line_marker.pose.orientation.w = 1.0;
-    line_marker.scale.x = 0.5; // 라인 두께 (더 두껍게 하여 잘 보이게)
+        // 텍스트 위치는 경로 지점 바로 위
+        text_marker.pose.position.x = point.position.x();
+        text_marker.pose.position.y = point.position.y();
+        text_marker.pose.position.z = 1.0; // 경로보다 1m 위에 표시
+        text_marker.pose.orientation.w = 1.0;
 
-    // 라인의 시작점과 끝점 계산 (예: 트랙 폭을 고려하여)
-    double line_half_length = 2.0; // 트랙 폭의 절반
-    geometry_msgs::Point start_point, end_point;
+        // 텍스트 크기
+        text_marker.scale.z = 0.3; // 텍스트 높이
 
-    start_point.x = line_center.x() - line_half_length * sin(line_yaw);
-    start_point.y = line_center.y() + line_half_length * cos(line_yaw);
-    start_point.z = 0.0;
-    
-    end_point.x = line_center.x() + line_half_length * sin(line_yaw);
-    end_point.y = line_center.y() - line_half_length * cos(line_yaw);
-    end_point.z = 0.0;
+        // 곡률 크기에 따라 색상 변경
+        // 0.2 미만: 녹색, 0.2~0.5: 노란색, 0.5 이상: 빨간색
+        if (point.curvature < 0.2) {
+            text_marker.color.r = 0.0; text_marker.color.g = 1.0; text_marker.color.b = 0.0; // Green
+        } else if (point.curvature < 0.5) {
+            text_marker.color.r = 1.0; text_marker.color.g = 1.0; text_marker.color.b = 0.0; // Yellow
+        } else {
+            text_marker.color.r = 1.0; text_marker.color.g = 0.0; text_marker.color.b = 0.0; // Red
+        }
+        text_marker.color.a = 1.0;
 
-    line_marker.points.push_back(start_point);
-    line_marker.points.push_back(end_point);
+        // 표시할 텍스트 (곡률 값을 소수점 2자리까지)
+        std::stringstream ss;
+        ss << std::fixed << std::setprecision(2) << point.curvature;
+        text_marker.text = ss.str();
 
-    // 라인 색상 (예: 빨간색)
-    line_marker.color.r = 1.0;
-    line_marker.color.g = 0.0;
-    line_marker.color.b = 0.0;
-    line_marker.color.a = 1.0;
+        marker_array.markers.push_back(text_marker);
+    }
 
-    // 마커 배열에 담아 발행
-    visualization_msgs::MarkerArray marker_array;
-    marker_array.markers.push_back(line_marker);
-    finish_line_marker_pub_.publish(marker_array);
+    curvature_marker_pub_.publish(marker_array);
 }
