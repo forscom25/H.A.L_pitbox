@@ -1426,6 +1426,8 @@ struct ControlParams {
     double max_throttle_;              // maximum throttle (0.0 to 1.0)
     //double steering_based_speed_gain_; // Gain for steering-based speed dampening
     double steering_sensitivity_; //시그모이드 민감도 파라미터
+    // [추가] 속도 제어를 위한 스티어링 값 필터 계수
+    double speed_control_steering_lpf_alpha_;    
     // =================== Vehicle Specification ===================
     double vehicle_length_;           // 차량 축거 (Wheelbase) (m)
 
@@ -1450,6 +1452,8 @@ struct ControlParams {
         if(!pnh.getParam("/control/SpeedControl/max_throttle", max_throttle_)){std::cerr<<"Param control/SpeedControl/max_throttle has error" << std::endl; return false;}
         //if(!pnh.getParam("/control/SpeedControl/steering_based_speed_gain", steering_based_speed_gain_)){std::cerr<<"Param control/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
         if(!pnh.getParam("/control/SpeedControl/steering_sensitivity", steering_sensitivity_)){std::cerr<<"Param control/SpeedControl/steering_sensitivity has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/SpeedControl/speed_control_steering_lpf_alpha", speed_control_steering_lpf_alpha_)){std::cerr<<"Param control/SpeedControl/speed_control_steering_lpf_alpha has error" << std::endl; return false;}
+
         if(!pnh.getParam("/control/Vehicle/wheel_base", vehicle_length_)){std::cerr<<"Param control/Vehicle/wheel_base has error" << std::endl; return false;}
         
         return true;
@@ -1666,7 +1670,7 @@ public:
 private:
     // Function
     std::vector<Eigen::Vector2d> sortConesByProximity(const std::vector<Eigen::Vector2d>& cones);
-
+    void generateLanesFromMemory_unsafe(); 
     /**
      * @brief Helper function to calculate the shortest distance between a point and a line segment.
      * @param p The target point.
@@ -1979,6 +1983,9 @@ private:
     std::shared_ptr<ControlParams> control_params_;
     std::unique_ptr<LateralController> lateral_controller_;
     std::unique_ptr<PIDController> longitudinal_controller_;
+
+    double smoothed_steering_angle_; // <-- [추가] 필터링된 스티어링 각도 저장 변수
+
 
 public:
     // Odometry & TF broadcasting
