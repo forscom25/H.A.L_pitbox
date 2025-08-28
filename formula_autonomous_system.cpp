@@ -1132,9 +1132,9 @@ std::vector<Eigen::Vector2d> MapManager::sortConesByProximity(const std::vector<
     return sorted_cones;
 }
 
-void MapManager::generateLanesFromMemory() {
+void MapManager::generateLanesFromMemory_unsafe() {
 
-    std::lock_guard<std::mutex> lock(cone_memory_mutex_);
+    //std::lock_guard<std::mutex> lock(cone_memory_mutex_);
     std::vector<Eigen::Vector2d> blue_cones, yellow_cones;
     
     for (const auto& cone : cone_memory_) {
@@ -1234,7 +1234,12 @@ void MapManager::generateLanesFromMemory() {
         right_lane_points_ = sorted_yellow; // Use raw points if not enough for spline
     }
 }
-
+// 2. 외부에서 호출할 원래 이름의 함수를 새로 만듭니다.
+// 이 함수는 오직 잠그고 내부 함수를 호출하는 역할만 합니다.
+void MapManager::generateLanesFromMemory() {
+    std::lock_guard<std::mutex> lock(cone_memory_mutex_);
+    generateLanesFromMemory_unsafe(); // 잠금 상태에서 실제 로직 함수 호출
+}
 /**
  * @brief Iterates through the cone memory to infer the color of 'unknown' cones
  * and removes cones that are far from the generated lanes, considering them as noise.
@@ -1248,7 +1253,7 @@ void MapManager::refineConeMap() {
     std::lock_guard<std::mutex> lock(cone_memory_mutex_);
 
     // 1. Generate temporary lanes from current map (guideline)
-    generateLanesFromMemory();
+    generateLanesFromMemory_unsafe();
 
     // Check sufficiency
     if (left_lane_points_.size() < 2 && right_lane_points_.size() < 2) {
@@ -1556,6 +1561,9 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectoryFromCones(co
 
     // 2. Generate path point based on local cone map
     path_points.push_back(Eigen::Vector2d(0.0, 0.0)); // Start with the (0,0) vehicle's current position
+    
+    // [추가] 이전 웨이포인트의 y값을 저장하여 경로를 부드럽게 만들기 위한 변수
+    double last_valid_y = 0.0;
 
     int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_);
     for (int i = 1; i <= num_points; ++i) {
@@ -1582,6 +1590,8 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectoryFromCones(co
         }
         
         Eigen::Vector2d waypoint(target_x, 0.0);
+
+
 
         // Calculate the y position based on the closest cones
         if (closest_blue && closest_yellow) {
@@ -1963,7 +1973,7 @@ double Stanley::calculateSteeringAngle(const VehicleState& current_state, const 
     //const double alpha = 1.0; // stability(0.0) <---> response(1.0)
     double filtered_steering_angle = params_->steering_lpf_alpha_ * steering_angle + (1.0 - params_->steering_lpf_alpha_) * last_filtered_steering_angle_;
     last_filtered_steering_angle_ = filtered_steering_angle;
-    
+
     // Clamp the steering angle: -max_steer_angle_ <= steering_angle <= max_steer_angle_
     return std::clamp(filtered_steering_angle, -params_->pp_max_steer_angle_, params_->pp_max_steer_angle_);
 }
@@ -2048,7 +2058,8 @@ FormulaAutonomousSystem::FormulaAutonomousSystem():
     current_mode_(DrivingMode::MAPPING),
     is_global_path_generated_(false),
     current_lap_(0),
-    vehicle_position_relative_to_line_(0.0) {
+    vehicle_position_relative_to_line_(0.0),
+    smoothed_steering_angle_(0.0) {
 }
 
 FormulaAutonomousSystem::~FormulaAutonomousSystem(){
@@ -2234,7 +2245,10 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     // Update global cone map
     std::vector<Cone> cones_for_planning = map_manager_->updateAndGetPlannedCones(vehicle_state, cones_);
     map_manager_->generateLanesFromMemory();
-
+    
+    // [추가] 맵 정제 및 색상 추정 로직 호출
+    map_manager_->refineConeMap();
+    
     // Behavior planning
     setRacingStrategy(vehicle_state, cones_for_planning);
 
@@ -2256,6 +2270,10 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     double steering_angle = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_);
 
     // 2. 종방향 제어: ...
+
+    // 2-1. 저주파 통과 필터를 이용해 스티어링 각도를 부드럽게 만듦
+    smoothed_steering_angle_ = control_params_->speed_control_steering_lpf_alpha_ * steering_angle + (1.0 - control_params_->speed_control_steering_lpf_alpha_) * smoothed_steering_angle_;
+
     // [수정] 시그모이드 함수를 이용한 목표 속도 계산
     double base_target_speed = planning_params_->default_speed_;
     double min_target_speed = planning_params_->min_speed_;
