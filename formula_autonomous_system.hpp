@@ -1355,52 +1355,71 @@ struct MappingParams {
 // ==================== Planning ====================
 
 struct PlanningParams {
-    // =================== Basic Trajectory Generation ===================
-    double lookahead_distance_;     // Lookahead distance (m)
-    double waypoint_spacing_;       // Distance between waypoints (m)
-    double default_speed_;          // Default speed for trajectory generation (m/s)
-    
-    // =================== Cone-based Path Planning ===================
-    double max_cone_distance_;      // Maximum cone distance to consider (m)
-    double lane_offset_;            // Offset from single cone (m)
-    
-    // =================== Safety Parameters ===================
-    double safety_margin_;          // Safety margin from cones (m)
 
-    // =================== Curvature-based Speed Planning Parameters ===================
-    double max_speed_;              // maximum speed (m/s)
-    double min_speed_;              // minimum speed (m/s)
-    double curvature_gain_;         // curvature gain for speed adjustment
+    // Structure to hold parameters for a specific trajectory generation mode
+    struct TrajectoryModeParams {
+        double lookahead_distance_;         // Lookahead distance (m)
+        double waypoint_spacing_;           // Distance between waypoints (m)
+        double max_speed_;                  // Max speed (m/s)
+        double min_speed_;                  // Minimum speed (m/s)
+        double curvature_gain_;             // curvature gain for speed adjustment
+        double lane_offset_;                // Offset from single cone (m)
+    };
+
+    struct TrajectoryGeneration {
+        TrajectoryModeParams mapping_mode;
+        TrajectoryModeParams racing_mode;
+    };
+
+    struct BehavioralLogic {
+        int total_laps_;
+    };
+    
+    // Main parameter holders
+    TrajectoryGeneration trajectory_generation;
+    BehavioralLogic behavioral_logic;
 
     // Print current parameters
     void print() const {
-        printf("=== Trajectory Parameters ===\n");
-        printf("Lookahead distance: %.3f m\n", lookahead_distance_);
-        printf("Waypoint spacing: %.3f m\n", waypoint_spacing_);
-        printf("Default speed: %.3f m/s\n", default_speed_);
-        printf("Max cone distance: %.3f m\n", max_cone_distance_);
-        printf("Lane offset: %.3f m\n", lane_offset_);
-        printf("Safety margin: %.3f m\n", safety_margin_);
-        printf("Max speed: %.3f m/s\n", max_speed_);
-        printf("Min speed: %.3f m/s\n", min_speed_);
-        printf("Curvature gain: %.3f\n", curvature_gain_);
-    }
-    
-    // Load parameters from ROS NodeHandle
-    bool getParameters(ros::NodeHandle& pnh) {
-        std::cout << "FormulaAutonomousSystem: Local planning parameters file updated" << std::endl;
+        printf("=== Planning Parameters ===\n");
         
-        // =================== Trajectory Parameters ===================
-        if(!pnh.getParam("/planning/trajectory/lookahead_distance", lookahead_distance_)){std::cerr<<"Param planning/trajectory/lookahead_distance has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/waypoint_spacing", waypoint_spacing_)){std::cerr<<"Param planning/trajectory/waypoint_spacing has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/default_speed", default_speed_)){std::cerr<<"Param planning/trajectory/default_speed has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/max_cone_distance", max_cone_distance_)){std::cerr<<"Param planning/trajectory/max_cone_distance has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/lane_offset", lane_offset_)){std::cerr<<"Param planning/trajectory/lane_offset has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/safety_margin", safety_margin_)){std::cerr<<"Param planning/trajectory/safety_margin has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/max_speed", max_speed_)){std::cerr<<"Param planning/trajectory/max_speed has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/min_speed", min_speed_)){std::cerr<<"Param planning/trajectory/min_speed has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/curvature_gain", curvature_gain_)){std::cerr<<"Param planning/trajectory/curvature_gain has error" << std::endl; return false;}
+        printf("\n[Trajectory Generation -> Mapping Mode]\n");
+        printf("  Lookahead Distance: %.3f m\n", trajectory_generation.mapping_mode.lookahead_distance_);
+        printf("  Waypoint Spacing: %.3f m\n", trajectory_generation.mapping_mode.waypoint_spacing_);
+        printf("  Max Speed: %.3f m/s\n", trajectory_generation.mapping_mode.max_speed_);
+        printf("  Lane Offset: %.3f m\n", trajectory_generation.mapping_mode.lane_offset_);
 
+        printf("\n[Trajectory Generation -> Racing Mode]\n");
+        printf("  Lookahead Distance: %.3f m\n", trajectory_generation.racing_mode.lookahead_distance_);
+        printf("  Waypoint Spacing: %.3f m\n", trajectory_generation.racing_mode.waypoint_spacing_);
+        printf("  Max Speed: %.3f m/s\n", trajectory_generation.racing_mode.max_speed_);
+        printf("  Min Speed: %.3f m/s\n", trajectory_generation.racing_mode.min_speed_);
+        printf("  Curvature Gain: %.3f\n", trajectory_generation.racing_mode.curvature_gain_);
+
+        printf("\n[Behavioral Logic]\n");
+        printf("  Total Laps: %d\n", behavioral_logic.total_laps_);
+    }
+
+    // Load all planning parameters from ROS NodeHandle
+    bool getParameters(ros::NodeHandle& pnh) {
+        std::cout << "FormulaAutonomousSystem: Loading Planning parameters..." << std::endl;
+        
+        // Load Trajectory Generation -> Mapping Mode 
+        if(!pnh.getParam("/planning/trajectory_generation/mapping_mode/lookahead_distance", trajectory_generation.mapping_mode.lookahead_distance_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/mapping_mode/waypoint_spacing", trajectory_generation.mapping_mode.waypoint_spacing_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/waypoint_spacing" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/mapping_mode/max_speed", trajectory_generation.mapping_mode.max_speed_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/max_speed" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/mapping_mode/lane_offset", trajectory_generation.mapping_mode.lane_offset_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lane_offset" << std::endl; return false; }
+
+        // Load Trajectory Generation -> Racing Mode parameters
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/lookahead_distance", trajectory_generation.racing_mode.lookahead_distance_)){std::cerr<<"Param /planning/trajectory_generation/racing_mode/lookahead_distance" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/waypoint_spacing", trajectory_generation.racing_mode.waypoint_spacing_)){std::cerr<<"Param /planning/trajectory_generation/racing_mode/lookahead_distance" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/max_speed", trajectory_generation.racing_mode.max_speed_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/min_speed", trajectory_generation.racing_mode.min_speed_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/curvature_gain", trajectory_generation.racing_mode.curvature_gain_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
+        
+        // Load Behavioral Logic parameters
+        if(!pnh.getParam("/planning/behavioral_logic/total_laps", behavioral_logic.total_laps_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
+        
         return true;
     }
 };
@@ -1754,10 +1773,9 @@ public:
     ~TrajectoryGenerator() = default;
     
     // Generate trajectory from cones and current planning state(for Mapping mode)
-    std::vector<TrajectoryPoint> generateTrajectoryFromCones(const std::vector<Cone>& cones, ASState planning_state);
+    std::vector<TrajectoryPoint> generatePathFromClosestCones(const std::vector<Cone>& cones, const PlanningParams::TrajectoryModeParams& params);
     // Generate local trajectory by following the global path (for RACING mode)
-    std::vector<TrajectoryPoint> getTrajectoryFromGlobalPath(const VehicleState& vehicle_state, const std::vector<TrajectoryPoint>& global_path);
-    std::vector<TrajectoryPoint> generateSimpleTrajectoryFromCones(const std::vector<Cone>& cones);
+    std::vector<TrajectoryPoint> getTrajectoryFromGlobalPath(const VehicleState& vehicle_state, const std::vector<TrajectoryPoint>& global_path, const PlanningParams::TrajectoryModeParams& params);
 
     /**
      * @brief Get last generated trajectory
