@@ -1592,55 +1592,34 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectoryFromCones(co
 
         } else if (closest_yellow) {
             waypoint.y() = closest_yellow->y() + params_->lane_offset_;
-        }
-        
-        // ==================== 스무딩 로직 추가 ====================
-        if (path_points.size() >= 2) {
-            // 이전 경로점의 y값과 새로 계산된 y값을 가중 평균하여 부드럽게 만듭니다.
-            double previous_y = path_points.back().y();
-            double smoothing_factor = 0.7; // 이전 경로점의 영향력 (0.0 ~ 1.0)
-            
-            // 콘이 하나도 감지되지 않았을 때만 이전 경로를 강하게 추종
-            if (!closest_blue && !closest_yellow) {
-                 // Predict future trajectory based on trajectory history
-                Eigen::Vector2d last_point = path_points.back();
-                Eigen::Vector2d prev_point = path_points[path_points.size() - 2];
 
-                double dx = last_point.x() - prev_point.x();
-                double dy = last_point.y() - prev_point.y();
-            
-                if (std::abs(dx) > 1e-6) { // prevent 0 division
-                    double slope = dy / dx;
-                    // 마지막 점에서 동일한 기울기로 연장하여 y좌표 예측
-                    waypoint.y() = last_point.y() + slope * (target_x - last_point.x());
-                } else {
-                    // 수직에 가까운 경우, 이전 y값을 그대로 사용
-                    waypoint.y() = last_point.y();
-                }
+        // Apply extrapolation
+        } else if (path_points.size() >= 2) {
+
+            // Predict future trajectory based on trajectory history
+            Eigen::Vector2d last_point = path_points.back();
+            Eigen::Vector2d prev_point = path_points[path_points.size() - 2];
+
+            double dx = last_point.x() - prev_point.x();
+            double dy = last_point.y() - prev_point.y();
+           
+            if (std::abs(dx) > 1e-6) { // prevent 0 division
+                double slope = dy / dx;
+                // 마지막 점에서 동일한 기울기로 연장하여 y좌표 예측
+                waypoint.y() = last_point.y() + slope * (target_x - last_point.x());
             } else {
-                // 콘이 감지되었을 때는 새로운 정보를 더 많이 반영
-                waypoint.y() = (smoothing_factor * previous_y) + ((1.0 - smoothing_factor) * waypoint.y());
+                // 수직에 가까운 경우, 이전 y값을 그대로 사용
+                waypoint.y() = last_point.y();
             }
+
+        } else if (!path_points.empty()) {
+            // 경로점이 하나만 있을 경우, 이전 y값을 그대로 사용 (직진)
+            waypoint.y() = path_points.back().y();
         }
 
         path_points.push_back(waypoint);
     }
-    // ======================= 경로 스무딩 필터 추가 =======================
-    // 촘촘한 경로점이 만드는 노이즈를 제거하여 진동을 방지합니다.
-    if (path_points.size() > 2 && params_->path_smoothing_factor_ > 0.0) {
-        std::vector<Eigen::Vector2d> smoothed_points;
-        smoothed_points.push_back(path_points.front()); // 첫 점은 그대로 유지
 
-        for (size_t i = 1; i < path_points.size(); ++i) {
-            // 이전 스무딩된 y값과 현재 y값을 가중 평균
-            double smoothed_y = params_->path_smoothing_factor_ * smoothed_points.back().y() +
-                              (1.0 - params_->path_smoothing_factor_) * path_points[i].y();
-            
-            smoothed_points.emplace_back(path_points[i].x(), smoothed_y);
-        }
-        path_points = smoothed_points; // 원본 경로점을 스무딩된 경로점으로 교체
-    }
-    // ====================================================================
     // 3. Use Parametric Spline
     if (path_points.size() >= 2) {
 
@@ -1682,12 +1661,7 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectoryFromCones(co
             double curvature = std::abs(dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
 
             // 곡률 기반 속도 계획
-            //double desired_speed = params_->max_speed_ / (1.0 + params_->curvature_gain_ * std::abs(curvature));
-            // 새로운 시그모이드 기반 속도 계획:
-            double speed_range = params_->max_speed_ - params_->min_speed_;
-            double sigmoid_value = 1.0 / (1.0 + std::exp(params_->sigmoid_k_gain_ * (curvature - params_->sigmoid_x_offset_)));
-            double desired_speed = params_->min_speed_ + speed_range * sigmoid_value;
-            
+            double desired_speed = params_->max_speed_ / (1.0 + params_->curvature_gain_ * std::abs(curvature));
             double target_speed = std::max(params_->min_speed_, std::min(desired_speed, params_->max_speed_));
 
             last_trajectory_.emplace_back(x, y, yaw, curvature, target_speed, s);
@@ -1986,10 +1960,10 @@ double Stanley::calculateSteeringAngle(const VehicleState& current_state, const 
     double steering_angle = heading_error + cross_track_steering;
 
     // 8. Low-Pass Filter
-    const double alpha = 0.6; // stability(0.0) <---> response(1.0)
-    double filtered_steering_angle = alpha * steering_angle + (1.0 - alpha) * last_filtered_steering_angle_;
+    //const double alpha = 1.0; // stability(0.0) <---> response(1.0)
+    double filtered_steering_angle = params_->steering_lpf_alpha_ * steering_angle + (1.0 - params_->steering_lpf_alpha_) * last_filtered_steering_angle_;
     last_filtered_steering_angle_ = filtered_steering_angle;
-
+    
     // Clamp the steering angle: -max_steer_angle_ <= steering_angle <= max_steer_angle_
     return std::clamp(filtered_steering_angle, -params_->pp_max_steer_angle_, params_->pp_max_steer_angle_);
 }
@@ -2278,33 +2252,25 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     // STEP 5: CONTROL - "How do I get there?"
     // =================================================================
     
-    // 1. 횡방향 제어: 경로와 현재 상태를 기반으로 조향각 계산
+    // 1. 횡방향 제어: ...
     double steering_angle = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_);
 
-    // 2. 종방향 제어: 목표 속도와 현재 속도를 기반으로 스로틀 계산
-    // 2-1. (기본 속도) 곡률 기반으로 계산된 경로의 목표 속도를 가져옴
-    double base_target_speed = planning_params_->max_speed_; // 경로가 없을 경우를 대비한 기본값
-    if (!trajectory_points_.empty()) {
-        int speed_target_idx = 0;
-        // 경로를 따라가며 'speed_lookahead_distance'에 가장 가까운 지점을 찾음
-        for (size_t i = 0; i < trajectory_points_.size(); ++i) {
-            // 's'는 경로 시작점부터의 누적 거리
-            if (trajectory_points_[i].s >= planning_params_->speed_lookahead_distance_) {
-                speed_target_idx = i;
-                break;
-            }
-            // lookahead보다 짧은 경로인 경우, 경로의 마지막 점을 목표로 삼음
-            speed_target_idx = trajectory_points_.size() - 1;
-        }
-        base_target_speed = trajectory_points_[speed_target_idx].speed;
-    }
+    // 2. 종방향 제어: ...
+    // [수정] 시그모이드 함수를 이용한 목표 속도 계산
+    double base_target_speed = planning_params_->default_speed_;
+    double min_target_speed = planning_params_->min_speed_;
+    double speed_range = base_target_speed - min_target_speed;
 
-    // 2-2. (실시간 보정) 계산된 스티어링 각도에 비례하여 목표 속도를 추가로 감속
-    double steering_dampening = std::abs(steering_angle) * control_params_->steering_based_speed_gain_;
-    double final_target_speed = base_target_speed - steering_dampening;
+    // tanh 함수를 이용해 스티어링 각도에 따라 0~1 사이의 감속 계수(dampening_factor)를 계산
+    // steering_sensitivity가 클수록 더 민감하게 반응
+    double dampening_factor = std::tanh(control_params_->steering_sensitivity_ * std::abs(steering_angle));
 
-    // 2-3. 최종 목표 속도가 planning_params_의 최소 속도보다 낮아지지 않도록 제한
-    final_target_speed = std::max(planning_params_->min_speed_, final_target_speed);
+    // 최종 목표 속도 계산
+    double final_target_speed = base_target_speed - speed_range * dampening_factor;
+
+    // 안전을 위해 최소 속도 보장
+    final_target_speed = std::max(min_target_speed, final_target_speed);
+
 
     // 2-4. 최종 목표 속도를 바탕으로 PID 제어기를 통해 스로틀 계산
     double throttle = longitudinal_controller_->calculate(final_target_speed, vehicle_state.speed);
