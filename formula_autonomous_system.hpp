@@ -1371,12 +1371,6 @@ struct PlanningParams {
     double max_speed_;              // maximum speed (m/s)
     double min_speed_;              // minimum speed (m/s)
     double curvature_gain_;         // curvature gain for speed adjustment
-    // =================== NEW: Sigmoid Parameters ===================
-    double sigmoid_k_gain_;
-    double sigmoid_x_offset_;
-    // =================== NEW: Path Smoothing Parameter ===================
-    double path_smoothing_factor_; // 경로 스무딩 강도 (0.0 ~ 1.0)
-    double speed_lookahead_distance_;
 
     // Print current parameters
     void print() const {
@@ -1405,11 +1399,8 @@ struct PlanningParams {
         if(!pnh.getParam("/planning/trajectory/safety_margin", safety_margin_)){std::cerr<<"Param planning/trajectory/safety_margin has error" << std::endl; return false;}
         if(!pnh.getParam("/planning/trajectory/max_speed", max_speed_)){std::cerr<<"Param planning/trajectory/max_speed has error" << std::endl; return false;}
         if(!pnh.getParam("/planning/trajectory/min_speed", min_speed_)){std::cerr<<"Param planning/trajectory/min_speed has error" << std::endl; return false;}
-        //if(!pnh.getParam("/planning/trajectory/curvature_gain", curvature_gain_)){std::cerr<<"Param planning/trajectory/curvature_gain has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/sigmoid_k_gain", sigmoid_k_gain_)){std::cerr<<"Param planning/trajectory/sigmoid_k_gain has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/sigmoid_x_offset", sigmoid_x_offset_)){std::cerr<<"Param planning/trajectory/sigmoid_x_offset has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/path_smoothing_factor", path_smoothing_factor_)){std::cerr<<"Param planning/trajectory/path_smoothing_factor has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/speed_lookahead_distance", speed_lookahead_distance_)){std::cerr<<"Param planning/trajectory/speed_lookahead_distance has error" << std::endl; return false;}
+        if(!pnh.getParam("/planning/trajectory/curvature_gain", curvature_gain_)){std::cerr<<"Param planning/trajectory/curvature_gain has error" << std::endl; return false;}
+
         return true;
     }
 };
@@ -1427,14 +1418,14 @@ struct ControlParams {
     // ===================  Stanley Controller Parameters =================== 
     double k_gain_; // Stanley controller gain k
     double k_gain_curvature_boost_; // k boost depending on curvature
-
+    double steering_lpf_alpha_; // <-- [추가] 스티어링 저주파 통과 필터 계수
     // =================== Longitudinal Control: PID Controller ===================
     double pid_kp_;                    // proportional gain
     double pid_ki_;                    // integral gain
     double pid_kd_;                    // differential gain
     double max_throttle_;              // maximum throttle (0.0 to 1.0)
-    double steering_based_speed_gain_; // Gain for steering-based speed dampening
-
+    //double steering_based_speed_gain_; // Gain for steering-based speed dampening
+    double steering_sensitivity_; //시그모이드 민감도 파라미터
     // =================== Vehicle Specification ===================
     double vehicle_length_;           // 차량 축거 (Wheelbase) (m)
 
@@ -1451,14 +1442,14 @@ struct ControlParams {
         // ===================  Stanley Controller Parameters =================== 
         if(!pnh.getParam("/control/Stanley/k_gain", k_gain_)){std::cerr<<"Param control/Stanley/k_gain has error" << std::endl; return false;}
         if(!pnh.getParam("/control/Stanley/k_gain_curvature_boost", k_gain_curvature_boost_)){std::cerr<<"Param control/Stanley/k_gain_curvature_boost has error" << std::endl; return false;}
-        
+        if(!pnh.getParam("/control/Stanley/steering_lpf_alpha", steering_lpf_alpha_)){std::cerr<<"Param control/Stanley/steering_lpf_alpha has error" << std::endl; return false;}
         // =================== Longitudinal Control: PID Controller ===================
         if(!pnh.getParam("/control/SpeedControl/pid_kp", pid_kp_)){std::cerr<<"Param control/SpeedControl/pid_kp has error" << std::endl; return false;}
         if(!pnh.getParam("/control/SpeedControl/pid_ki", pid_ki_)){std::cerr<<"Param control/SpeedControl/pid_ki has error" << std::endl; return false;}
         if(!pnh.getParam("/control/SpeedControl/pid_kd", pid_kd_)){std::cerr<<"Param control/SpeedControl/pid_kd has error" << std::endl; return false;}
         if(!pnh.getParam("/control/SpeedControl/max_throttle", max_throttle_)){std::cerr<<"Param control/SpeedControl/max_throttle has error" << std::endl; return false;}
-        if(!pnh.getParam("/control/SpeedControl/steering_based_speed_gain", steering_based_speed_gain_)){std::cerr<<"Param control/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
-
+        //if(!pnh.getParam("/control/SpeedControl/steering_based_speed_gain", steering_based_speed_gain_)){std::cerr<<"Param control/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/SpeedControl/steering_sensitivity", steering_sensitivity_)){std::cerr<<"Param control/SpeedControl/steering_sensitivity has error" << std::endl; return false;}
         if(!pnh.getParam("/control/Vehicle/wheel_base", vehicle_length_)){std::cerr<<"Param control/Vehicle/wheel_base has error" << std::endl; return false;}
         
         return true;
