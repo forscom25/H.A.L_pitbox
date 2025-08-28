@@ -73,7 +73,7 @@ bool FormulaAutonomousSystemNode::init(){
     lane_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lane_marker", 1);
     global_path_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("/fsds/global_path", 1);                                // Globalpath
     trajectory_from_global_path_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("/fsds/trajectory_from_global_path", 1); // TrajectoryFromGlobalpath
-    curvature_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/curvature_marker", 1);
+    
     // Get parameters
     pnh_.getParam("/system/main_loop_rate", main_loop_rate_);
 
@@ -152,7 +152,6 @@ void FormulaAutonomousSystemNode::publish(){
     publishStartFinishLineMarker();
     publishGlobalPathMarker();                  // Globalpath
     publishTrajectoryFromGlobalPathMarker();    // TrajectoryFromGlobalpath
-    publishCurvatureMarker();
     return;
 }
 
@@ -720,56 +719,4 @@ int main(int argc, char** argv){
     ros::spin();
 
     return 0;
-}
-// formula_autonomous_system_node.cpp 파일 맨 아래에 추가
-
-void FormulaAutonomousSystemNode::publishCurvatureMarker() {
-    // Get header
-    lidar_msg_mutex_.lock();
-    std_msgs::Header header = lidar_msg_.header;
-    lidar_msg_mutex_.unlock();
-    header.frame_id = "fsds/FSCar"; // 차량 기준 좌표계
-
-    visualization_msgs::MarkerArray marker_array;
-    const auto& trajectory = formula_autonomous_system_->trajectory_points_;
-
-    int id = 0;
-    for (const auto& point : trajectory) {
-        visualization_msgs::Marker text_marker;
-        text_marker.header = header;
-        text_marker.ns = "curvature_text";
-        text_marker.id = id++;
-        text_marker.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
-        text_marker.action = visualization_msgs::Marker::ADD;
-        text_marker.lifetime = ros::Duration(0.1);
-
-        // 텍스트 위치는 경로 지점 바로 위
-        text_marker.pose.position.x = point.position.x();
-        text_marker.pose.position.y = point.position.y();
-        text_marker.pose.position.z = 1.0; // 경로보다 1m 위에 표시
-        text_marker.pose.orientation.w = 1.0;
-
-        // 텍스트 크기
-        text_marker.scale.z = 0.3; // 텍스트 높이
-
-        // 곡률 크기에 따라 색상 변경
-        // 0.2 미만: 녹색, 0.2~0.5: 노란색, 0.5 이상: 빨간색
-        if (point.curvature < 0.2) {
-            text_marker.color.r = 0.0; text_marker.color.g = 1.0; text_marker.color.b = 0.0; // Green
-        } else if (point.curvature < 0.5) {
-            text_marker.color.r = 1.0; text_marker.color.g = 1.0; text_marker.color.b = 0.0; // Yellow
-        } else {
-            text_marker.color.r = 1.0; text_marker.color.g = 0.0; text_marker.color.b = 0.0; // Red
-        }
-        text_marker.color.a = 1.0;
-
-        // 표시할 텍스트 (곡률 값을 소수점 2자리까지)
-        std::stringstream ss;
-        ss << std::fixed << std::setprecision(2) << point.curvature;
-        text_marker.text = ss.str();
-
-        marker_array.markers.push_back(text_marker);
-    }
-
-    curvature_marker_pub_.publish(marker_array);
 }
