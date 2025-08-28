@@ -1757,6 +1757,7 @@ public:
     std::vector<TrajectoryPoint> generateTrajectoryFromCones(const std::vector<Cone>& cones, ASState planning_state);
     // Generate local trajectory by following the global path (for RACING mode)
     std::vector<TrajectoryPoint> getTrajectoryFromGlobalPath(const VehicleState& vehicle_state, const std::vector<TrajectoryPoint>& global_path);
+    std::vector<TrajectoryPoint> generateSimpleTrajectoryFromCones(const std::vector<Cone>& cones);
 
     /**
      * @brief Get last generated trajectory

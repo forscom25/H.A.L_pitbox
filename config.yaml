@@ -142,8 +142,8 @@ mapping:
 planning:
   trajectory:
     # Basic trajectory generation
-    lookahead_distance: 20.0
-    waypoint_spacing: 0.5
+    lookahead_distance: 3.0
+    waypoint_spacing: 0.2
     default_speed: 3.0 # StopTrajectory
     
     # Cone-based path planning (meters)
@@ -181,9 +181,9 @@ control:
     max_steer_angle: 1.0
 
   Stanley:
-    k_gain: 0.6
+    k_gain: 0.9
     k_gain_curvature_boost: 1.2
-    alpha: 0.5 # (stability(0.0) <---> response(1.0))
+    alpha: 1.0 # (stability(0.0) <---> response(1.0))
 
   # PID Speed Control Parameters
   SpeedControl:

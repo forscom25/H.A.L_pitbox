@@ -1775,6 +1775,80 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectoryFromCones(co
 }
 
 /**
+ * @brief [테스트용] 오직 가장 가까운 콘 정보만을 사용하여 매우 단순한 직선 경로를 생성합니다.
+ * @param cones 현재 감지된 콘 벡터
+ * @return 생성된 단순 경로
+ */
+std::vector<TrajectoryPoint> TrajectoryGenerator::generateSimpleTrajectoryFromCones(const std::vector<Cone>& cones)
+{
+    last_trajectory_.clear();
+
+    // 1. 파란색, 노란색 콘 분리
+    std::vector<Eigen::Vector2d> blue_cones_local, yellow_cones_local;
+    for (const auto& cone : cones) {
+        if (cone.center.x > 0.1) { // 차량 전방 콘만 사용
+            if (cone.color == "blue") {
+                blue_cones_local.push_back(Eigen::Vector2d(cone.center.x, cone.center.y));
+            } else if (cone.color == "yellow") {
+                yellow_cones_local.push_back(Eigen::Vector2d(cone.center.x, cone.center.y));
+            }
+        }
+    }
+
+    // 2. 차량 원점(0,0)에서 가장 가까운 파란 콘과 노란 콘 찾기
+    auto find_closest_cone = [](const std::vector<Eigen::Vector2d>& cone_list) {
+        if (cone_list.empty()) return Eigen::Vector2d(0.0, 0.0);
+        return *std::min_element(cone_list.begin(), cone_list.end(),
+            [](const Eigen::Vector2d& a, const Eigen::Vector2d& b) {
+                return a.squaredNorm() < b.squaredNorm();
+            });
+    };
+
+    Eigen::Vector2d closest_blue = find_closest_cone(blue_cones_local);
+    Eigen::Vector2d closest_yellow = find_closest_cone(yellow_cones_local);
+
+    // 3. 목표 지점(target_y) 계산
+    double target_y = 0.0;
+    bool target_found = false;
+
+    if (!closest_blue.isZero() && !closest_yellow.isZero()) {
+        // 양쪽 콘이 모두 있으면 중간점을 목표로 설정
+        target_y = (closest_blue.y() + closest_yellow.y()) * 0.5;
+        target_found = true;
+    } else if (!closest_blue.isZero()) {
+        // 파란 콘만 있으면 오른쪽으로 일정 간격 오프셋
+        target_y = closest_blue.y() - params_->lane_offset_;
+        target_found = true;
+    } else if (!closest_yellow.isZero()) {
+        // 노란 콘만 있으면 왼쪽으로 일정 간격 오프셋
+        target_y = closest_yellow.y() + params_->lane_offset_;
+        target_found = true;
+    }
+
+    // 4. 목표 지점을 향한 단순 직선 경로 생성
+    int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_);
+    for (int i = 0; i <= num_points; ++i) {
+        double x = i * params_->waypoint_spacing_;
+        // 콘이 하나라도 있으면 해당 y값을 향하고, 없으면 직진(y=0)
+        double y = target_found ? (x / params_->lookahead_distance_) * target_y : 0.0;
+        
+        last_trajectory_.emplace_back(x, y, 0.0, 0.0, params_->default_speed_, x);
+    }
+    
+    // 경로의 yaw 값을 계산 (단순히 두 점 사이의 각도)
+    if (last_trajectory_.size() >= 2) {
+        for(size_t i = 0; i < last_trajectory_.size() - 1; ++i) {
+            double dx = last_trajectory_[i+1].position.x() - last_trajectory_[i].position.x();
+            double dy = last_trajectory_[i+1].position.y() - last_trajectory_[i].position.y();
+            last_trajectory_[i].yaw = std::atan2(dy, dx);
+        }
+        last_trajectory_.back().yaw = last_trajectory_[last_trajectory_.size() - 2].yaw;
+    }
+
+    return last_trajectory_;
+}
+
+/**
  * @brief Generates a local trajectory for the controller by extracting and transforming a segment from the global path.
  * @param vehicle_state The current state of the vehicle in the global frame.
  * @param global_path The pre-computed global path.
@@ -2348,7 +2422,8 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
 
     } else {
         // In MAPPING mode (or as a fallback), generate path from real-time cones
-        trajectory_points_ = trajectory_generator_->generateTrajectoryFromCones(cones_for_planning, planning_state_);
+        // trajectory_points_ = trajectory_generator_->generateTrajectoryFromCones(cones_for_planning, planning_state_);
+        trajectory_points_ = trajectory_generator_->generateSimpleTrajectoryFromCones(cones_for_planning);
     }
 
     // =================================================================
