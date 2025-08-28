@@ -193,6 +193,10 @@ control:
 
     # Steering-based speed dampening gain
     #steering_based_speed_gain: 5.0 # Higher value means more aggressive slowing on turns.
-    steering_sensitivity: 0.3      # 아크탄젠트함수 민감도
+    # tanh함수 민갑도
+    steering_sensitivity: 0.3  
+    # [추가] 속도 제어용 스티어링 필터 계수. 값이 작을수록 부드러움. 추천: 0.9 ~ 0.98
+    speed_control_steering_lpf_alpha: 0.95 
+
   Vehicle:
     wheel_base: 1.55
