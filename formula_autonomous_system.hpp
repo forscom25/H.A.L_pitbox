@@ -1121,6 +1121,9 @@ struct PerceptionParams
     
     // Image Processing
     bool camera_enable_preprocessing_;
+    bool camera_enable_fog_correction_; // <<< 추가
+    double camera_clahe_clip_limit_;    // <<< 추가
+    int camera_clahe_tile_grid_size_;   // <<< 추가
     double camera_gaussian_blur_sigma_; // noise reduction sigma for Gaussian blur
     int camera_bilateral_filter_d_; // smart blur filter(maintain edges)
     
@@ -1170,6 +1173,9 @@ struct PerceptionParams
         printf("  Camera 2 (Right) Translation: [%.3f, %.3f, %.3f]\n", camera2_translation_[0], camera2_translation_[1], camera2_translation_[2]);
         printf("  Camera 2 (Right) Rotation: [%.3f, %.3f, %.3f] deg\n", camera2_rotation_[0], camera2_rotation_[1], camera2_rotation_[2]);
         printf("  Preprocessing enabled: %s\n", camera_enable_preprocessing_ ? "true" : "false");
+         printf("  Fog Correction enabled: %s\n", camera_enable_fog_correction_ ? "true" : "false"); // <<< 추가
+        printf("  CLAHE Clip Limit: %.1f\n", camera_clahe_clip_limit_);                             // <<< 추가
+        printf("  CLAHE Tile Grid Size: %d\n", camera_clahe_tile_grid_size_);                       // <<< 추가
         printf("  Gaussian blur sigma: %.3f\n", camera_gaussian_blur_sigma_);
         printf("  Bilateral filter diameter: %d\n", camera_bilateral_filter_d_);
         printf("  HSV window size: %d\n", camera_hsv_window_size_);
@@ -1247,6 +1253,9 @@ struct PerceptionParams
 
         // Camera Image Processing
         if(!pnh.getParam("/perception/camera_image_processing/enable_preprocessing", camera_enable_preprocessing_)){std::cerr<<"Param perception/camera_image_processing/enable_preprocessing has error" << std::endl; return false;}
+        if(!pnh.getParam("/perception/camera_image_processing/enable_fog_correction", camera_enable_fog_correction_)){std::cerr<<"Param perception/camera_image_processing/enable_fog_correction has error" << std::endl; return false;} // <<< 추가
+        if(!pnh.getParam("/perception/camera_image_processing/clahe_clip_limit", camera_clahe_clip_limit_)){std::cerr<<"Param perception/camera_image_processing/clahe_clip_limit has error" << std::endl; return false;} // <<< 추가
+        if(!pnh.getParam("/perception/camera_image_processing/clahe_tile_grid_size", camera_clahe_tile_grid_size_)){std::cerr<<"Param perception/camera_image_processing/clahe_tile_grid_size has error" << std::endl; return false;} // <<< 추가
         if(!pnh.getParam("/perception/camera_image_processing/gaussian_blur_sigma", camera_gaussian_blur_sigma_)){std::cerr<<"Param perception/camera_image_processing/gaussian_blur_sigma has error" << std::endl; return false;}
         if(!pnh.getParam("/perception/camera_image_processing/bilateral_filter_diameter", camera_bilateral_filter_d_)){std::cerr<<"Param perception/camera_image_processing/bilateral_filter_diameter has error" << std::endl; return false;}
 
