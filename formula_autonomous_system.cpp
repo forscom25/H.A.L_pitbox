@@ -1523,27 +1523,35 @@ TrajectoryGenerator::TrajectoryGenerator(const std::shared_ptr<PlanningParams>& 
 
 std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectoryFromCones(const std::vector<Cone>& cones, ASState planning_state)
 {
-    last_trajectory_.clear();
-
     if (planning_state != ASState::AS_DRIVING) {
         return generateStopTrajectory();
     }
     
+    std::vector<TrajectoryPoint> prev_trajectory = last_trajectory_;
+    last_trajectory_.clear();
+
     std::vector<Eigen::Vector2d> blue_cones_local, yellow_cones_local;
+    std::vector<Eigen::Vector2d> all_valid_cones_local;
 
     // 1. Filter cones based on color and position
     for (const auto& cone : cones) {
         if (cone.center.x > 0.1) { // Only consider cones in front of the vehicle
+
             if (cone.color == "blue") {
                 blue_cones_local.push_back(Eigen::Vector2d(cone.center.x, cone.center.y));
+
             } else if (cone.color == "yellow") {
                 yellow_cones_local.push_back(Eigen::Vector2d(cone.center.x, cone.center.y));
+            }
+            
+            if (cone.color != "out of image") {
+                all_valid_cones_local.push_back(Eigen::Vector2d(cone.center.x, cone.center.y));
             }
         }
     }
     
     // If no cones are detected, generate a default trajectory
-    if (blue_cones_local.empty() && yellow_cones_local.empty()) {
+    if (all_valid_cones_local.empty()) {
         int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_);
         for (int i = 0; i <= num_points; ++i) {
             double x = i * params_->waypoint_spacing_;
@@ -1551,21 +1559,32 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectoryFromCones(co
         }
         return last_trajectory_;
     }
-    
-    std::vector<Eigen::Vector2d> path_points;
 
     // 2. Generate path point based on local cone map
+    std::vector<Eigen::Vector2d> path_points;
     path_points.push_back(Eigen::Vector2d(0.0, 0.0)); // Start with the (0,0) vehicle's current position
+
+    // Memory for last generated path
+    double last_known_blue_y = params_->lane_offset_;
+    double last_known_yellow_y = -params_->lane_offset_;
+    bool blue_found_once = false;
+    bool yellow_found_once = false;
 
     int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_);
     for (int i = 1; i <= num_points; ++i) {
         double target_x = i * params_->waypoint_spacing_;
-        
+
         Eigen::Vector2d* closest_blue = nullptr;
         Eigen::Vector2d* closest_yellow = nullptr;
-        double min_blue_dist = 1.5, min_yellow_dist = 1.5;
+        Eigen::Vector2d* closest_left_lidar_cone = nullptr;
+        Eigen::Vector2d* closest_right_lidar_cone = nullptr;
+
+        // Generate LEFT(blue) guideline
+        double current_blue_y = last_known_blue_y;
+
+        // 1st priority: search color(BLUE)
+        double min_blue_dist = 1.5;
         
-        // Find the closest blue and yellow cones to the target x position
         for (auto& cone_pos : blue_cones_local) {
             double dist = std::abs(cone_pos.x() - target_x);
             if (dist < min_blue_dist) {
@@ -1573,6 +1592,56 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectoryFromCones(co
                 closest_blue = &cone_pos;
             }
         }
+        
+        if (closest_blue) {
+            current_blue_y = closest_blue->y();
+
+        // 2nd priority: use lidar data
+        } else {
+            double min_left_dist = 1.5;
+
+            for(auto& cone_pos : all_valid_cones_local) {
+                bool is_left = false;
+
+                // y is the classifier at the start
+                if (prev_trajectory.empty()) {
+                    is_left = cone_pos.y() > 0;
+                
+                } else {
+                    auto closest_it = std::min_element(prev_trajectory.begin(), prev_trajectory.end(), 
+                        [&](const TrajectoryPoint& a, const TrajectoryPoint& b){
+                            return (a.position - cone_pos).squaredNorm() < (b.position - cone_pos).squaredNorm();
+                        });
+                    Eigen::Vector2d to_cone = cone_pos - closest_it->position;
+
+                    // Sign of cross product determines the position
+                    double cross_product_z = -sin(closest_it->yaw) * to_cone.x() + cos(closest_it->yaw) * to_cone.y();
+                    is_left = cross_product_z > 0;
+                }
+
+                if (is_left) {
+                    double dist = std::abs(cone_pos.x() - target_x);
+
+                    if (dist < min_left_dist) {
+                        min_left_dist = dist;
+                        closest_left_lidar_cone = &cone_pos;
+                    }
+                }
+            }
+
+            if (closest_left_lidar_cone) {
+                current_blue_y = closest_left_lidar_cone->y();
+            }
+        }
+
+        last_known_blue_y = current_blue_y;
+
+        // Generate RIGHT(yellow) guideline
+        double current_yellow_y = last_known_yellow_y;
+
+        // 1st priority: search color(YELLLOW)
+        double min_yellow_dist = 1.5;
+
         for (auto& cone_pos : yellow_cones_local) {
             double dist = std::abs(cone_pos.x() - target_x);
             if (dist < min_yellow_dist) {
@@ -1580,21 +1649,59 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectoryFromCones(co
                 closest_yellow = &cone_pos;
             }
         }
+
+        if (closest_yellow) {
+            current_yellow_y = closest_yellow->y();
+
+        // 2nd priority: use lidar data
+        } else {
+            Eigen::Vector2d* closest_right_lidar_cone = nullptr;
+            double min_right_dist = 1.5;
+
+            for(auto& cone_pos : all_valid_cones_local) {
+                bool is_left;
+
+                // y is the classifier at the start
+                if (prev_trajectory.empty()) {
+                    is_left = cone_pos.y() > 0;
+
+                } else {
+                    auto closest_it = std::min_element(prev_trajectory.begin(), prev_trajectory.end(), 
+                        [&](const TrajectoryPoint& a, const TrajectoryPoint& b){
+                            return (a.position - cone_pos).squaredNorm() < (b.position - cone_pos).squaredNorm();
+                        });
+                    Eigen::Vector2d to_cone = cone_pos - closest_it->position;
+
+                    // Sign of cross product determines the position
+                    double cross_product_z = -sin(closest_it->yaw) * to_cone.x() + cos(closest_it->yaw) * to_cone.y();
+                    is_left = cross_product_z > 0;
+                }
+
+                if (!is_left) {
+                    double dist = std::abs(cone_pos.x() - target_x);
+
+                    if (dist < min_right_dist) {
+                        min_right_dist = dist;
+                        closest_right_lidar_cone = &cone_pos;
+                    }
+                }
+            }                
+
+            if (closest_right_lidar_cone) {
+                current_yellow_y = closest_right_lidar_cone->y();
+            }
+        }
+
+        last_known_yellow_y = current_yellow_y;
         
+        // Generate final waypoint
         Eigen::Vector2d waypoint(target_x, 0.0);
 
-        // Calculate the y position based on the closest cones
-        if (closest_blue && closest_yellow) {
-            waypoint.y() = (closest_blue->y() + closest_yellow->y()) * 0.5;
+        // Calculate waypoint based on the guidelines
+        waypoint.y() = (current_blue_y + current_yellow_y) * 0.5;
 
-        } else if (closest_blue) {
-            waypoint.y() = closest_blue->y() - params_->lane_offset_;
-
-        } else if (closest_yellow) {
-            waypoint.y() = closest_yellow->y() + params_->lane_offset_;
-
-        // Apply extrapolation
-        } else if (path_points.size() >= 2) {
+        // Fallback(etrapolation)
+        if (!closest_blue && !closest_yellow && !closest_left_lidar_cone && !closest_right_lidar_cone && path_points.size() >= 2) {
 
             // Predict future trajectory based on trajectory history
             Eigen::Vector2d last_point = path_points.back();
@@ -1611,10 +1718,6 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectoryFromCones(co
                 // 수직에 가까운 경우, 이전 y값을 그대로 사용
                 waypoint.y() = last_point.y();
             }
-
-        } else if (!path_points.empty()) {
-            // 경로점이 하나만 있을 경우, 이전 y값을 그대로 사용 (직진)
-            waypoint.y() = path_points.back().y();
         }
 
         path_points.push_back(waypoint);
@@ -1960,7 +2063,7 @@ double Stanley::calculateSteeringAngle(const VehicleState& current_state, const 
     double steering_angle = heading_error + cross_track_steering;
 
     // 8. Low-Pass Filter
-    const double alpha = 1.0; // stability(0.0) <---> response(1.0)
+    const double alpha = params_->stanley_alpha_; // stability(0.0) <---> response(1.0)
     double filtered_steering_angle = alpha * steering_angle + (1.0 - alpha) * last_filtered_steering_angle_;
     last_filtered_steering_angle_ = filtered_steering_angle;
 
