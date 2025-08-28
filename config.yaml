@@ -76,7 +76,10 @@ perception:
 
   # Image preprocessing settings
   camera_image_processing:
-    enable_preprocessing: false
+    enable_preprocessing: true
+    enable_fog_correction: true # <<< 추가: 안개 보정 기능을 켜는 스위치입니다.
+    clahe_clip_limit: 2.0 # <<< 추가: 대비 증폭을 제한하는 값입니다. 2.0 ~ 4.0 사이가 적당합니다.
+    clahe_tile_grid_size: 8 # <<< 추가: 대비를 계산할 지역 격자의 크기입니다. 8x8이 표준입니다.
     gaussian_blur_sigma: 1.0
     bilateral_filter_diameter: 9
 
