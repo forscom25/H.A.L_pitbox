@@ -599,8 +599,40 @@ cv::Mat ColorDetection::preprocessImage(const cv::Mat& rgb_image) {
     }
     
     cv::Mat processed = rgb_image.clone();
+
+    // =================================================================
+    // <<< 새로운 기능: LAB 색 공간에서 CLAHE를 이용한 안개 보정 >>>
+    // =================================================================
+    if (params_->camera_enable_fog_correction_) {
+        // 이미지를 BGR에서 LAB 색 공간으로 변환합니다. L 채널이 밝기 정보를 담고 있습니다.
+        cv::Mat lab_image;
+        cv::cvtColor(processed, lab_image, cv::COLOR_BGR2Lab);
+
+        // LAB 이미지를 각 채널(L, A, B)로 분리합니다.
+        std::vector<cv::Mat> lab_channels(3);
+        cv::split(lab_image, lab_channels);
+
+        // CLAHE 객체를 생성하고 설정값을 적용합니다.
+        cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE();
+        clahe->setClipLimit(params_->camera_clahe_clip_limit_);
+        clahe->setTilesGridSize(cv::Size(params_->camera_clahe_tile_grid_size_, params_->camera_clahe_tile_grid_size_)); // <<< 이렇게 수정
+
+        // L 채널에 CLAHE를 적용하여 대비를 향상시킵니다.
+        cv::Mat enhanced_l_channel;
+        clahe->apply(lab_channels[0], enhanced_l_channel);
+
+        // 향상된 L 채널과 기존의 A, B 채널을 다시 합칩니다.
+        lab_channels[0] = enhanced_l_channel;
+        cv::merge(lab_channels, lab_image);
+
+        // 처리된 LAB 이미지를 다시 BGR 색 공간으로 변환합니다.
+        cv::cvtColor(lab_image, processed, cv::COLOR_Lab2BGR);
+    }
+    // =================================================================
+    // <<< 새로운 기능 종료 >>>
+    // =================================================================
     
-    // Apply Gaussian blur for noise reduction
+    // 노이즈 감소를 위한 가우시안 블러 적용
     if (params_->camera_gaussian_blur_sigma_ > 0) {
         int kernel_size = static_cast<int>(2 * params_->camera_gaussian_blur_sigma_ * 3 + 1);
         if (kernel_size % 2 == 0) kernel_size++;
@@ -610,7 +642,7 @@ cv::Mat ColorDetection::preprocessImage(const cv::Mat& rgb_image) {
                         params_->camera_gaussian_blur_sigma_);
     }
     
-    // Apply bilateral filter for edge-preserving smoothing
+    // 경계선을 보존하며 노이즈를 제거하는 양방향 필터 적용
     if (params_->camera_bilateral_filter_d_ > 0) {
         cv::Mat temp;
         cv::bilateralFilter(processed, temp, 
