@@ -163,29 +163,47 @@ planning:
 # ===========================================
 # Control Parameters
 # ===========================================
+# config.yaml 수정 제안
+
 control:
   ControllerSelection:
     # lateral_controller_type: "PurePursuit", "Stanley"
     lateral_controller_type: "Stanley"
 
-  PurePursuit:
-    lookahead_distance: 5.0
-    max_steer_angle: 1.0
+  # Parameters used during the MAPPING lap
+  mapping_mode:
+    PurePursuit:
+      lookahead_distance: 5.0
+      max_steer_angle: 1.0
 
-  Stanley:
-    k_gain: 0.9
-    k_gain_curvature_boost: 1.2
-    alpha: 1.0 # (stability(0.0) <---> response(1.0))
+    Stanley:
+      k_gain: 0.9
+      alpha: 1.0
 
-  # PID Speed Control Parameters
-  SpeedControl:
-    pid_kp: 0.3
-    pid_ki: 0.0
-    pid_kd: 0.01
-    max_throttle: 0.4
+    SpeedControl:
+      pid_kp: 0.3
+      pid_ki: 0.0
+      pid_kd: 0.01
+      max_throttle: 0.4
+      steering_based_speed_gain: 0.0
 
-    # Steering-based speed dampening gain
-    steering_based_speed_gain: 0.0 # Higher value means more aggressive slowing on turns.
+  # Parameters used during the RACING laps
+  racing_mode:
+    PurePursuit:
+      lookahead_distance: 8.0
+      max_steer_angle: 1.0
+
+    Stanley:
+      k_gain: 1.2
+      k_gain_curvature_boost: 1.5
+      alpha: 1.0
+
+    SpeedControl:
+      pid_kp: 0.5
+      pid_ki: 0.0
+      pid_kd: 0.02
+      max_throttle: 0.6
+      steering_based_speed_gain: 0.5
 
   Vehicle:
     wheel_base: 1.55

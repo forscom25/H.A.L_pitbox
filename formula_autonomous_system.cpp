@@ -1778,53 +1778,59 @@ void FormulaAutonomousSystem::generateGlobalPath() {
 // ================================================================================================
 
 // ================== PurePursuit Controller Implementation ===================
+PurePursuit::PurePursuit() {}
 
-PurePursuit::PurePursuit(const std::shared_ptr<ControlParams>& params)
-    : params_(params) {
-}
+double PurePursuit::calculateSteeringAngle(const VehicleState& current_state,
+                                          const std::vector<TrajectoryPoint>& path,
+                                          const ControlParams::ControllerModeParams& params,
+                                          const double& vehicle_length) const {
 
-double PurePursuit::calculateSteeringAngle(const VehicleState& current_state, const std::vector<TrajectoryPoint>& path) const {
     if (path.empty()) {
         return 0.0;
     }
 
-    int target_idx = findTargetPointIndex(path);
+    int target_idx = findTargetPointIndex(path, params);
     const Eigen::Vector2d& target_point = path[target_idx].position;
 
-    return calculateSteeringAngleInternal(target_point);
+    return calculateSteeringAngleInternal(target_point, params, vehicle_length);
 }
 
-int PurePursuit::findTargetPointIndex(const std::vector<TrajectoryPoint>& path) const {
+int PurePursuit::findTargetPointIndex(const std::vector<TrajectoryPoint>& path, const ControlParams::ControllerModeParams& params) const {
+
     int target_idx = 0;
-    for (int i = 0; i < path.size(); ++i) {
-        int current_idx = i % path.size();
-        double dist_from_car = path[current_idx].position.norm();
-        
-        if (dist_from_car >= params_->pp_lookahead_distance_) {
-            target_idx = current_idx;
+    for (size_t i = 0; i < path.size(); ++i) {
+        double dist_from_car = path[i].position.norm();
+
+        if (dist_from_car >= params.pp_lookahead_distance_) {
+            target_idx = i;
             break;
         }
     }
     return target_idx;
 }
 
-double PurePursuit::calculateSteeringAngleInternal(const Eigen::Vector2d& target_point) const {
-    double alpha = std::atan2(target_point.y(), target_point.x() + params_->vehicle_length_ * 0.5); // local trajectory is defined at the center of the vehicle
-    double delta = std::atan2(2.0 * params_->vehicle_length_ * std::sin(alpha), params_->pp_lookahead_distance_);
-    
-    return std::clamp(delta, -params_->pp_max_steer_angle_, params_->pp_max_steer_angle_);
+double PurePursuit::calculateSteeringAngleInternal(const Eigen::Vector2d& target_point,
+                                                   const ControlParams::ControllerModeParams& params,
+                                                   const double& vehicle_length) const {
+
+    double alpha = std::atan2(target_point.y(), target_point.x() + vehicle_length * 0.5); // local trajectory is defined at the center of the vehicle
+    double delta = std::atan2(2.0 * vehicle_length * std::sin(alpha), params.pp_lookahead_distance_);
+
+    return std::clamp(delta, -params.pp_max_steer_angle_, params.pp_max_steer_angle_);
 }
 
 // ================== Stanley Controller Implementation ===================
+Stanley::Stanley() {}
 
-Stanley::Stanley(const std::shared_ptr<ControlParams>& params) : params_(params) {}
-
-double Stanley::calculateSteeringAngle(const VehicleState& current_state, const std::vector<TrajectoryPoint>& path) const
+double Stanley::calculateSteeringAngle(const VehicleState& current_state,
+                                       const std::vector<TrajectoryPoint>& path,
+                                       const ControlParams::ControllerModeParams& params,
+                                       const double& vehicle_length) const
 {
     if (path.empty()) return 0.0;
 
     // 1. Get the point of front axle(vehicle frame)
-    const Eigen::Vector2d front_axle_pos(params_->vehicle_length_ * 0.5, 0.0); // local trajectory is defined at the center of the vehicle
+    const Eigen::Vector2d front_axle_pos(vehicle_length * 0.5, 0.0); // local trajectory is defined at the center of the vehicle
     
     // 2. Find the closest point on the path to the front axle
     double min_dist = std::numeric_limits<double>::max();
@@ -1864,8 +1870,10 @@ double Stanley::calculateSteeringAngle(const VehicleState& current_state, const 
     // 5. Calculate dynamic k gain based on curvature
     const TrajectoryPoint& target_point = path[closest_segment_idx];
     double target_curvature = std::abs(target_point.curvature);
-    double curvature_boost_factor = 1.0 + params_->k_gain_curvature_boost_ * target_curvature;
-    double dynamic_k = params_->k_gain_ * curvature_boost_factor;
+
+    // k_gain_curvature_boost_ has value only if RACING MODE
+    double curvature_boost_factor = 1.0 + params.k_gain_curvature_boost_ * target_curvature;
+    double dynamic_k = params.k_gain_ * curvature_boost_factor;
 
     // 6. Calculate the cross track steering, 0.1 is added to the speed to avoid division by zero
     double cross_track_steering = atan2(dynamic_k * -cross_track_error, current_state.speed + 0.1);
@@ -1874,23 +1882,26 @@ double Stanley::calculateSteeringAngle(const VehicleState& current_state, const 
     double steering_angle = heading_error + cross_track_steering;
 
     // 8. Low-Pass Filter
-    const double alpha = params_->stanley_alpha_; // stability(0.0) <---> response(1.0)
+    const double alpha = params.stanley_alpha_; // stability(0.0) <---> response(1.0)
     double filtered_steering_angle = alpha * steering_angle + (1.0 - alpha) * last_filtered_steering_angle_;
     last_filtered_steering_angle_ = filtered_steering_angle;
 
     // Clamp the steering angle: -max_steer_angle_ <= steering_angle <= max_steer_angle_
-    return std::clamp(filtered_steering_angle, -params_->pp_max_steer_angle_, params_->pp_max_steer_angle_);
+    return std::clamp(filtered_steering_angle, -params.pp_max_steer_angle_, params.pp_max_steer_angle_);
 }
 
 // ==================== PID Controller Implementation ====================
 
-PIDController::PIDController(const std::shared_ptr<ControlParams>& params)
-    : params_(params),
-      kp_(params_->pid_kp_), ki_(params_->pid_ki_), kd_(params_->pid_kd_), 
-      min_output_(0.0), max_output_(params_->max_throttle_),
-      integral_error_(0.0), previous_error_(0.0), first_run_(true) {}
+// formula_autonomous_system.cpp
 
-double PIDController::calculate(double setpoint, double measured_value) {
+// ==================== PID Controller Implementation ====================
+
+// 생성자에서 멤버 변수 초기화 부분을 제거하고, 상태 변수만 초기화
+PIDController::PIDController()
+    : integral_error_(0.0), previous_error_(0.0), first_run_(true) {}
+
+// 함수 시그니처 변경 및 게인 값들을 인자로 직접 받아서 사용
+double PIDController::calculate(double setpoint, double measured_value, double kp, double ki, double kd, double max_output) {
     auto current_time = std::chrono::steady_clock::now();
     
     // 첫 실행 시 dt가 비정상적으로 커지는 것을 방지
@@ -1905,26 +1916,21 @@ double PIDController::calculate(double setpoint, double measured_value) {
     std::chrono::duration<double> delta_time = current_time - last_time_;
     double dt = delta_time.count();
     
-    // dt가 0이거나 너무 작은 경우, 계산 오류를 방지
     if (dt <= 1e-6) {
-        // 이전 제어값을 그대로 사용하거나 0을 반환할 수 있습니다.
-        // 여기서는 P, I, D 중 P항만 계산하여 반환합니다.
-        return std::clamp(kp_ * (setpoint - measured_value), min_output_, max_output_);
+        return std::clamp(kp * (setpoint - measured_value), 0.0, max_output);
     }
 
     // 1. 비례(Proportional) 항 계산
     double error = setpoint - measured_value;
-    double p_term = kp_ * error;
+    double p_term = kp * error;
 
     // 2. 적분(Integral) 항 계산
     integral_error_ += error * dt;
-    // Integral Wind-up 방지를 위해 적분항도 제한할 수 있습니다. (선택적)
-    // integral_error_ = std::clamp(integral_error_, min_integral, max_integral);
-    double i_term = ki_ * integral_error_;
+    double i_term = ki * integral_error_;
 
     // 3. 미분(Derivative) 항 계산
     double derivative_error = (error - previous_error_) / dt;
-    double d_term = kd_ * derivative_error;
+    double d_term = kd * derivative_error;
 
     // 최종 제어 출력값 계산
     double output = p_term + i_term + d_term;
@@ -1934,7 +1940,7 @@ double PIDController::calculate(double setpoint, double measured_value) {
     last_time_ = current_time;
 
     // 출력값을 지정된 범위 내로 제한(clamping)
-    return std::clamp(output, min_output_, max_output_);
+    return std::clamp(output, 0.0, max_output);
 }
 
 void PIDController::reset() {
@@ -2012,13 +2018,15 @@ bool FormulaAutonomousSystem::init(ros::NodeHandle& pnh){
 
     // Control
     if (control_params_->lateral_controller_type_ == "Stanley") { 
-        lateral_controller_ = std::make_unique<Stanley>(control_params_);
+        lateral_controller_ = std::make_unique<Stanley>();
         ROS_INFO("Lateral Controller: Stanley selected");
+
     } else { // Default to Pure Pursuit
-        lateral_controller_ = std::make_unique<PurePursuit>(control_params_);
+        lateral_controller_ = std::make_unique<PurePursuit>();
         ROS_INFO("Lateral Controller: PurePursuit selected");
     }
-    longitudinal_controller_ = std::make_unique<PIDController>(control_params_);
+
+    longitudinal_controller_ = std::make_unique<PIDController>();
 
     is_initialized_ = true;
     return true;
@@ -2171,32 +2179,44 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     // STEP 5: CONTROL - "How do I get there?"
     // =================================================================
     
-    // 1. 횡방향 제어: 경로와 현재 상태를 기반으로 조향각 계산
-    double steering_angle = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_);
+    // 1. 현재 주행 모드에 맞는 제어 파라미터 선택
+    const auto& current_control_params = (current_mode_ == DrivingMode::RACING)
+                                         ? control_params_->racing_mode
+                                         : control_params_->mapping_mode;
 
-    // 2. 종방향 제어: 목표 속도와 현재 속도를 기반으로 스로틀 계산
-    // 2-1. (기본 속도) 곡률 기반으로 계산된 경로의 목표 속도를 가져옴
-    double base_target_speed = trajectory_points_[0].speed;
+    // 2. 횡방향 제어: 경로와 현재 상태, 그리고 현재 모드 파라미터를 기반으로 조향각 계산
+    double steering_angle = lateral_controller_->calculateSteeringAngle(vehicle_state,
+                                                                        trajectory_points_,
+                                                                        current_control_params,
+                                                                        control_params_->vehicle_length_);
 
-    // 2-2. (실시간 보정) 계산된 스티어링 각도에 비례하여 목표 속도를 추가로 감속
-    double steering_dampening = std::abs(steering_angle) * control_params_->steering_based_speed_gain_;
+    // 3. 종방향 제어: 목표 속도와 현재 속도를 기반으로 스로틀 계산
+    double base_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].speed;
+
+    // 3-1. (실시간 보정) 계산된 스티어링 각도에 비례하여 목표 속도를 추가로 감속
+    double steering_dampening = std::abs(steering_angle) * current_control_params.steering_based_speed_gain_;
     double final_target_speed = base_target_speed - steering_dampening;
 
-    // 2-3. 최종 목표 속도가 planning_params_의 최소 속도보다 낮아지지 않도록 제한
+    // 3-2. 최종 목표 속도가 planning_params_의 최소 속도보다 낮아지지 않도록 제한
     final_target_speed = std::max(current_planning_params.min_speed_, final_target_speed);
 
-    // 2-4. 최종 목표 속도를 바탕으로 PID 제어기를 통해 스로틀 계산
-    double throttle = longitudinal_controller_->calculate(final_target_speed, vehicle_state.speed);
+    // 3-3. 최종 목표 속도를 바탕으로 PID 제어기를 통해 스로틀 계산
+    double throttle = longitudinal_controller_->calculate(final_target_speed,
+                                                          vehicle_state.speed,
+                                                          current_control_params.pid_kp_,
+                                                          current_control_params.pid_ki_,
+                                                          current_control_params.pid_kd_,
+                                                          current_control_params.max_throttle_);
 
-    // 3. 계산된 제어 명령을 멤버 변수에 저장
+    // 4. 계산된 제어 명령을 멤버 변수에 저장
     control_command_msg.steering = -steering_angle; // FSDS 좌표계에 맞게 음수(-) 적용
     if (throttle > 0.0){
         control_command_msg.throttle = throttle;
         control_command_msg.brake = 0.0;
-    }
-    else{
+
+    } else{
         control_command_msg.throttle = 0.0;
-        control_command_msg.brake = -throttle;
+        control_command_msg.brake = -throttle; // 급정지를 막기 위해 브레이크는 0으로 유지 (필요 시 수정)
     }
 
     // Debug

@@ -1427,52 +1427,78 @@ struct PlanningParams {
 // ==================== Control ====================
 
 struct ControlParams {
-    // ===================  Controller Selection =================== 
+    // Structure to hold parameters for a specific controller mode
+    struct ControllerModeParams {
+        // Lateral Control: Pure Pursuit
+        double pp_lookahead_distance_;
+        double pp_max_steer_angle_;
+
+        // Lateral Control: Stanley
+        double k_gain_;
+        double k_gain_curvature_boost_; // Note: This is only used in racing_mode
+        double stanley_alpha_;
+
+        // Longitudinal Control: PID Controller
+        double pid_kp_;
+        double pid_ki_;
+        double pid_kd_;
+        double max_throttle_;
+        double steering_based_speed_gain_;
+    };
+
+    // ===================  Controller Selection ===================
     std::string lateral_controller_type_;
-    
-    // =================== Lateral Control: Pure Pursuit ===================
-    double pp_lookahead_distance_;    // lookahead distance (m)
-    double pp_max_steer_angle_;       // maximum steering angle (radians)
 
-    // ===================  Stanley Controller Parameters =================== 
-    double k_gain_; // Stanley controller gain k
-    double k_gain_curvature_boost_; // k boost depending on curvature
-    double stanley_alpha_; // Low-Pass Filter alpha
-
-    // =================== Longitudinal Control: PID Controller ===================
-    double pid_kp_;                    // proportional gain
-    double pid_ki_;                    // integral gain
-    double pid_kd_;                    // differential gain
-    double max_throttle_;              // maximum throttle (0.0 to 1.0)
-    double steering_based_speed_gain_; // Gain for steering-based speed dampening
+    // Mode-specific parameter sets
+    ControllerModeParams mapping_mode;
+    ControllerModeParams racing_mode;
 
     // =================== Vehicle Specification ===================
-    double vehicle_length_;           // 차량 축거 (Wheelbase) (m)
+    double vehicle_length_;
 
     bool getParameters(ros::NodeHandle& pnh) {
         std::cout << "FormulaAutonomousSystem: Control parameters file updated" << std::endl;
         
-        // ===================  Controller Selection =================== 
+        // ===================  Controller Selection ===================
         if(!pnh.getParam("/control/ControllerSelection/lateral_controller_type", lateral_controller_type_)){std::cerr<<"Param control/ControllerSelection/lateral_controller_type has error" << std::endl; return false;}
-        
-        // =================== Lateral Control: Pure Pursuit ===================
-        if(!pnh.getParam("/control/PurePursuit/lookahead_distance", pp_lookahead_distance_)){std::cerr<<"Param control/PurePursuit/lookahead_distance has error" << std::endl; return false;}
-        if(!pnh.getParam("/control/PurePursuit/max_steer_angle", pp_max_steer_angle_)){std::cerr<<"Param control/PurePursuit/max_steer_angle has error" << std::endl; return false;}
 
-        // ===================  Stanley Controller Parameters =================== 
-        if(!pnh.getParam("/control/Stanley/k_gain", k_gain_)){std::cerr<<"Param control/Stanley/k_gain has error" << std::endl; return false;}
-        if(!pnh.getParam("/control/Stanley/k_gain_curvature_boost", k_gain_curvature_boost_)){std::cerr<<"Param control/Stanley/k_gain_curvature_boost has error" << std::endl; return false;}
-        if(!pnh.getParam("/control/Stanley/alpha", stanley_alpha_)){std::cerr<<"Param control/Stanley/alpha has error" << std::endl; return false;}
-        
-        // =================== Longitudinal Control: PID Controller ===================
-        if(!pnh.getParam("/control/SpeedControl/pid_kp", pid_kp_)){std::cerr<<"Param control/SpeedControl/pid_kp has error" << std::endl; return false;}
-        if(!pnh.getParam("/control/SpeedControl/pid_ki", pid_ki_)){std::cerr<<"Param control/SpeedControl/pid_ki has error" << std::endl; return false;}
-        if(!pnh.getParam("/control/SpeedControl/pid_kd", pid_kd_)){std::cerr<<"Param control/SpeedControl/pid_kd has error" << std::endl; return false;}
-        if(!pnh.getParam("/control/SpeedControl/max_throttle", max_throttle_)){std::cerr<<"Param control/SpeedControl/max_throttle has error" << std::endl; return false;}
-        if(!pnh.getParam("/control/SpeedControl/steering_based_speed_gain", steering_based_speed_gain_)){std::cerr<<"Param control/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
+        // ===================  Mapping Mode Parameters ===================
+        // Pure Pursuit
+        if(!pnh.getParam("/control/mapping_mode/PurePursuit/lookahead_distance", mapping_mode.pp_lookahead_distance_)){std::cerr<<"Param control/mapping_mode/PurePursuit/lookahead_distance has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/mapping_mode/PurePursuit/max_steer_angle", mapping_mode.pp_max_steer_angle_)){std::cerr<<"Param control/mapping_mode/PurePursuit/max_steer_angle has error" << std::endl; return false;}
 
+        // Stanley
+        if(!pnh.getParam("/control/mapping_mode/Stanley/k_gain", mapping_mode.k_gain_)){std::cerr<<"Param control/mapping_mode/Stanley/k_gain has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/mapping_mode/Stanley/alpha", mapping_mode.stanley_alpha_)){std::cerr<<"Param control/mapping_mode/Stanley/alpha has error" << std::endl; return false;}
+        mapping_mode.k_gain_curvature_boost_ = 0.0; // Noit used in mapping mode, reset to 0.0
+
+        // SpeedControl
+        if(!pnh.getParam("/control/mapping_mode/SpeedControl/pid_kp", mapping_mode.pid_kp_)){std::cerr<<"Param control/mapping_mode/SpeedControl/pid_kp has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/mapping_mode/SpeedControl/pid_ki", mapping_mode.pid_ki_)){std::cerr<<"Param control/mapping_mode/SpeedControl/pid_ki has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/mapping_mode/SpeedControl/pid_kd", mapping_mode.pid_kd_)){std::cerr<<"Param control/mapping_mode/SpeedControl/pid_kd has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/mapping_mode/SpeedControl/max_throttle", mapping_mode.max_throttle_)){std::cerr<<"Param control/mapping_mode/SpeedControl/max_throttle has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/mapping_mode/SpeedControl/steering_based_speed_gain", mapping_mode.steering_based_speed_gain_)){std::cerr<<"Param control/mapping_mode/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
+
+        // ===================  Racing Mode Parameters ===================
+        // Pure Pursuit
+        if(!pnh.getParam("/control/racing_mode/PurePursuit/lookahead_distance", racing_mode.pp_lookahead_distance_)){std::cerr<<"Param control/racing_mode/PurePursuit/lookahead_distance has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/PurePursuit/max_steer_angle", racing_mode.pp_max_steer_angle_)){std::cerr<<"Param control/racing_mode/PurePursuit/max_steer_angle has error" << std::endl; return false;}
+
+        // Stanley
+        if(!pnh.getParam("/control/racing_mode/Stanley/k_gain", racing_mode.k_gain_)){std::cerr<<"Param control/racing_mode/Stanley/k_gain has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/Stanley/k_gain_curvature_boost", racing_mode.k_gain_curvature_boost_)){std::cerr<<"Param control/racing_mode/Stanley/k_gain_curvature_boost has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/Stanley/alpha", racing_mode.stanley_alpha_)){std::cerr<<"Param control/racing_mode/Stanley/alpha has error" << std::endl; return false;}
+
+        // SpeedControl
+        if(!pnh.getParam("/control/racing_mode/SpeedControl/pid_kp", racing_mode.pid_kp_)){std::cerr<<"Param control/racing_mode/SpeedControl/pid_kp has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/SpeedControl/pid_ki", racing_mode.pid_ki_)){std::cerr<<"Param control/racing_mode/SpeedControl/pid_ki has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/SpeedControl/pid_kd", racing_mode.pid_kd_)){std::cerr<<"Param control/racing_mode/SpeedControl/pid_kd has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/SpeedControl/max_throttle", racing_mode.max_throttle_)){std::cerr<<"Param control/racing_mode/SpeedControl/max_throttle has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/SpeedControl/steering_based_speed_gain", racing_mode.steering_based_speed_gain_)){std::cerr<<"Param control/racing_mode/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
+
+        // =================== Vehicle Specification ===================
         if(!pnh.getParam("/control/Vehicle/wheel_base", vehicle_length_)){std::cerr<<"Param control/Vehicle/wheel_base has error" << std::endl; return false;}
-        
+
         return true;
     }
 };
@@ -1821,34 +1847,43 @@ class LateralController
 {
 public:
     virtual ~LateralController() = default;
-    virtual double calculateSteeringAngle(const VehicleState& current_state, const std::vector<TrajectoryPoint>& path) const = 0;
+    virtual double calculateSteeringAngle(const VehicleState& current_state,
+                                          const std::vector<TrajectoryPoint>& path,
+                                          const ControlParams::ControllerModeParams& params,
+                                          const double& vehicle_length) const = 0;
 };
+
 // Pure Pursuit Controller
 class PurePursuit : public LateralController
 {
 public:
-    explicit PurePursuit(const std::shared_ptr<ControlParams>& params);
+    explicit PurePursuit(); // No longer gets parameters
     
-    double calculateSteeringAngle(const VehicleState& current_state, const std::vector<TrajectoryPoint>& path) const override;
+    double calculateSteeringAngle(const VehicleState& current_state,
+                                  const std::vector<TrajectoryPoint>& path,
+                                  const ControlParams::ControllerModeParams& params,
+                                  const double& vehicle_length) const override;
 
 private:
     // 내부 헬퍼 함수들은 그대로 유지
-    int findTargetPointIndex(const std::vector<TrajectoryPoint>& path) const;
-    double calculateSteeringAngleInternal(const Eigen::Vector2d& target_point) const;
-
-    std::shared_ptr<ControlParams> params_; 
+    int findTargetPointIndex(const std::vector<TrajectoryPoint>& path, const ControlParams::ControllerModeParams& params) const;
+    double calculateSteeringAngleInternal(const Eigen::Vector2d& target_point,
+                                        const ControlParams::ControllerModeParams& params,
+                                        const double& vehicle_length) const;
 };
 
 // Stanley Controller
 class Stanley : public LateralController
 {
 public:
-    explicit Stanley(const std::shared_ptr<ControlParams>& params);
+    explicit Stanley(); // No longer gets parameters
 
-    double calculateSteeringAngle(const VehicleState& current_state, const std::vector<TrajectoryPoint>& path) const override;
+    double calculateSteeringAngle(const VehicleState& current_state,
+                                  const std::vector<TrajectoryPoint>& path,
+                                  const ControlParams::ControllerModeParams& params,
+                                  const double& vehicle_length) const override;
 
 private:
-    std::shared_ptr<ControlParams> params_;
     mutable double last_filtered_steering_angle_ = 0.0;
 };
 
@@ -1859,23 +1894,19 @@ private:
 class PIDController
 {
 public:
-    /**
-     * @brief PID 제어기 생성자
-     * @param kp 비례(Proportional) 게인
-     * @param ki 적분(Integral) 게인
-     * @param kd 미분(Derivative) 게인
-     * @param min_output 출력값의 최솟값
-     * @param max_output 출력값의 최댓값
-     */
-    PIDController(const std::shared_ptr<ControlParams>& params);
+    PIDController(); // No longer gets parameters
 
     /**
      * @brief 제어값을 계산합니다.
      * @param setpoint 목표값 (Desired value)
      * @param measured_value 현재 측정값 (Actual value)
+     * @param kp 비례(Proportional) 게인
+     * @param ki 적분(Integral) 게인
+     * @param kd 미분(Derivative) 게인
+     * @param max_output 최대 출력값
      * @return double 계산된 제어 출력값
      */
-    double calculate(double setpoint, double measured_value);
+    double calculate(double setpoint, double measured_value, double kp, double ki, double kd, double max_output);
 
     /**
      * @brief 제어기의 내부 상태(적분항, 이전 오차)를 초기화합니다.
@@ -1883,17 +1914,6 @@ public:
     void reset();
 
 private:
-    std::shared_ptr<ControlParams> params_;
-
-    // PID 게인
-    double kp_;
-    double ki_;
-    double kd_;
-
-    // 출력 제한
-    double min_output_;
-    double max_output_;
-
     // 제어기 내부 상태 변수
     double integral_error_;
     double previous_error_;
