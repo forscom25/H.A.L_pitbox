@@ -152,9 +152,9 @@ planning:
     racing_mode:
       lookahead_distance: 15.0
       waypoint_spacing: 0.5
-      max_speed: 10.0
+      max_speed: 7.0
       min_speed: 3.0
-      curvature_gain: 1.5
+      curvature_gain: 3.5
 
   behavioral_logic:
     # Lap Counting & Race Logic
@@ -163,8 +163,6 @@ planning:
 # ===========================================
 # Control Parameters
 # ===========================================
-# config.yaml 수정 제안
-
 control:
   ControllerSelection:
     # lateral_controller_type: "PurePursuit", "Stanley"
@@ -177,7 +175,7 @@ control:
       max_steer_angle: 1.0
 
     Stanley:
-      k_gain: 0.9
+      k_gain: 1.0
       alpha: 1.0
 
     SpeedControl:
@@ -194,16 +192,16 @@ control:
       max_steer_angle: 1.0
 
     Stanley:
-      k_gain: 1.2
+      k_gain: 1.8
       k_gain_curvature_boost: 1.5
       alpha: 1.0
 
     SpeedControl:
-      pid_kp: 0.5
+      pid_kp: 0.4
       pid_ki: 0.0
       pid_kd: 0.02
-      max_throttle: 0.6
-      steering_based_speed_gain: 0.5
+      max_throttle: 0.4
+      steering_based_speed_gain: 1.2
 
   Vehicle:
     wheel_base: 1.55
