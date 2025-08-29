@@ -211,3 +211,5 @@ public: // ROS
     std::unique_ptr<FormulaAutonomousSystem> formula_autonomous_system_;
 };
 
+
+#endif // FORMULA_AUTONOMOUS_SYSTEM_NODE_HPP
