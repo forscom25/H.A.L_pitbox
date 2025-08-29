@@ -1521,13 +1521,12 @@ TrajectoryGenerator::TrajectoryGenerator(const std::shared_ptr<PlanningParams>& 
               << params_->trajectory_generation.mapping_mode.waypoint_spacing_ << "m" << std::endl;
 }
 
-
+std::vector<TrajectoryPoint> TrajectoryGenerator::generatePathFromClosestCones(const std::vector<Cone>& cones, const PlanningParams::TrajectoryModeParams& params)
 {
     last_trajectory_.clear();
 
     // 1. Filter blue and yellow cones
     std::vector<Eigen::Vector2d> blue_cones_local, yellow_cones_local;
-
     for (const auto& cone : cones) {
         if (cone.center.x > 0.1) { // Use only cones in front of the vehicle
             if (cone.color == "blue") {
@@ -1537,7 +1536,6 @@ TrajectoryGenerator::TrajectoryGenerator(const std::shared_ptr<PlanningParams>& 
             }
         }
     }
-
 
     // 2. Find the closest blue and yellow cone from the vehicle's origin (0,0)
     auto find_closest_cone = [](const std::vector<Eigen::Vector2d>& cone_list) {
@@ -1605,7 +1603,8 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::getTrajectoryFromGlobalPath(co
     last_local_path_points_.clear();
     if (global_path.size() < 2) return last_trajectory_;
 
-
+    double vehicle_yaw = vehicle_state.yaw;
+    Eigen::Vector2d vehicle_pos = vehicle_state.position;
 
     // 1. Find the closest point on the global path to the vehicle.
     auto closest_it = std::min_element(global_path.begin(), global_path.end(),
@@ -1625,144 +1624,23 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::getTrajectoryFromGlobalPath(co
             traversed_s += (global_point.position - global_path[prev_idx].position).norm();
         }
 
+        if (traversed_s > params.lookahead_distance_) {
+            break;
+        }
 
+        // 3. Transform the global point to the vehicle's local coordinate frame.
+        Eigen::Vector2d relative_pos = global_point.position - vehicle_pos;
+        double x_local = relative_pos.x() * cos(-vehicle_yaw) - relative_pos.y() * sin(-vehicle_yaw);
+        double y_local = relative_pos.x() * sin(-vehicle_yaw) + relative_pos.y() * cos(-vehicle_yaw);
+        
+        // Normalize angle to be within [-PI, PI]
+        double yaw_local = global_point.yaw - vehicle_yaw;
+        while (yaw_local > M_PI) yaw_local -= 2.0 * M_PI;
+        while (yaw_local < -M_PI) yaw_local += 2.0 * M_PI;
 
         // Add the transformed point with pre-calculated data to the local trajectory
         last_trajectory_.emplace_back(x_local, y_local, yaw_local, global_point.curvature, global_point.speed, global_point.s);
         last_local_path_points_.emplace_back(x_local, y_local); // For visualization
-    }
-
-    return last_trajectory_;
-}
-
-/**
- * @brief Generates a local trajectory for the controller by extracting and transforming a segment from the global path.
- * @param vehicle_state The current state of the vehicle in the global frame.
- * @param global_path The pre-computed global path.
- * @return A local trajectory in the vehicle's coordinate frame.
- */
-
- std::vector<TrajectoryPoint> TrajectoryGenerator::getTrajectoryFromGlobalPath(const VehicleState& vehicle_state, const std::vector<TrajectoryPoint>& global_path) {
-    last_trajectory_.clear();
-    last_local_path_points_.clear(); // 디버깅용 경로 초기화
-    if (global_path.size() < 2) return last_trajectory_;
-
-    double vehicle_yaw = vehicle_state.yaw;
-    Eigen::Vector2d vehicle_pos = vehicle_state.position;
-
-    // 1. 벡터 정보를 사용하여 전역 경로에서 최적의 시작점을 찾습니다.
-    // 차량과 가깝고, 진행 방향이 유사한 지점을 찾습니다.
-    double best_score = std::numeric_limits<double>::max();
-    size_t target_idx = 0;
-
-    // 차량의 현재 진행 방향 벡터 생성
-    Eigen::Vector2d vehicle_heading_vec(cos(vehicle_yaw), sin(vehicle_yaw));
-
-    for (size_t i = 0; i < global_path.size(); ++i) {
-
-        const auto& path_point = global_path[i];
-
-        // 경로 지점의 진행 방향 벡터 생성
-        Eigen::Vector2d path_heading_vec(cos(path_point.yaw), sin(path_point.yaw));
-        // 두 벡터의 내적(dot product)을 통해 방향 유사도 계산 (1에 가까울수록 유사)
-        double dot_product = vehicle_heading_vec.dot(path_heading_vec);
-
-        // 차량 진행 방향과 어느정도 유사한 방향의 점들만 후보로 간주
-        if (dot_product > 0) { // 90도 이내의 각도를 가진 점만 필터링
-
-            double dist_sq = (path_point.position - vehicle_pos).squaredNorm();
-            // 점수 = 거리 / (방향 유사도). 점수가 낮을수록 좋은 후보.
-            // (1.0 + dot_product)를 사용하여 방향이 유사할수록 점수에 큰 가중치를 줌.
-            double score = dist_sq / (1.0 + dot_product);
-
-            if (score < best_score) {
-                best_score = score;
-                target_idx = i;
-            }
-        }
-    }
-
-    // 2. 찾아낸 최적의 시작점부터 경로 조각을 추출합니다.
-    std::vector<TrajectoryPoint> local_path_global_coords;
-    double current_s = 0.0;
-
-    for (size_t i = 0; i < global_path.size(); ++i) {
-        size_t current_idx = (target_idx + i) % global_path.size(); // 루프 처리
-
-        if (i > 0) {
-            size_t prev_idx = (target_idx + i - 1) % global_path.size();
-            current_s += (global_path[current_idx].position - global_path[prev_idx].position).norm();
-        }
-
-        if (current_s > params_->lookahead_distance_) {
-            break;
-        }
-
-        local_path_global_coords.push_back(global_path[current_idx]);
-    }
-
-    // 3. 추출된 경로 조각을 차량의 지역 좌표계로 변환합니다.
-    std::vector<Eigen::Vector2d> path_points_local;
-
-    for (const auto& global_point : local_path_global_coords) {
-
-        Eigen::Vector2d relative_pos = global_point.position - vehicle_pos;
-        double x_local = relative_pos.x() * cos(-vehicle_yaw) - relative_pos.y() * sin(-vehicle_yaw);
-        double y_local = relative_pos.x() * sin(-vehicle_yaw) + relative_pos.y() * cos(-vehicle_yaw);
-
-        path_points_local.emplace_back(x_local, y_local);
-    }
-
-    last_local_path_points_ = path_points_local; // 시각화를 위해 저장
-
-    if (path_points_local.size() < 3) {
-        ROS_WARN_THROTTLE(1.0, "TrajectoryGenerator: Not enough points from global path (%zu) to create a spline.", path_points_local.size());
-        return last_trajectory_;
-    }
-
-    // 4. 지역 좌표계의 점들로 부드러운 스플라인 경로를 생성합니다.
-    std::vector<double> s_pts, x_pts, y_pts;
-
-    s_pts.push_back(0.0);
-    x_pts.push_back(path_points_local[0].x());
-    y_pts.push_back(path_points_local[0].y());
-
-    for (size_t i = 1; i < path_points_local.size(); ++i) {
-
-        double dist = (path_points_local[i] - path_points_local[i - 1]).norm();
-
-        if (dist < 0.01) continue;
-
-        s_pts.push_back(s_pts.back() + dist);
-        x_pts.push_back(path_points_local[i].x());
-        y_pts.push_back(path_points_local[i].y());
-    }
-
-    if (x_pts.size() < 3) {
-        ROS_WARN_THROTTLE(1.0, "TrajectoryGenerator: Not enough unique points after filtering (%zu) to create a spline.", x_pts.size());
-        return last_trajectory_;
-    }
-
-    tk::spline spline_x, spline_y;
-
-    spline_x.set_points(s_pts, x_pts);
-    spline_y.set_points(s_pts, y_pts);
-    double total_length = s_pts.back();
-
-    for (double s = 0; s < total_length; s += params_->waypoint_spacing_) {
-
-        double x = spline_x(s);
-        double y = spline_y(s);
-        double dx = spline_x.deriv(1, s);
-        double dy = spline_y.deriv(1, s);
-        double yaw = std::atan2(dy, dx);
-        double ddx = spline_x.deriv(2, s);
-        double ddy = spline_y.deriv(2, s);
-        double curvature = std::abs(dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
-        double desired_speed = params_->max_speed_ / (1.0 + params_->curvature_gain_ * std::abs(curvature));
-        double target_speed = std::max(params_->min_speed_, std::min(desired_speed, params_->max_speed_));
-
-        last_trajectory_.emplace_back(x, y, yaw, curvature, target_speed, s);
     }
 
     return last_trajectory_;
@@ -1989,11 +1867,14 @@ double Stanley::calculateSteeringAngle(const VehicleState& current_state, const 
     double curvature_boost_factor = 1.0 + params_->k_gain_curvature_boost_ * target_curvature;
     double dynamic_k = params_->k_gain_ * curvature_boost_factor;
 
+    // 6. Calculate the cross track steering, 0.1 is added to the speed to avoid division by zero
+    double cross_track_steering = atan2(dynamic_k * -cross_track_error, current_state.speed + 0.1);
+
     // 7. Calculate the steering angle
     double steering_angle = heading_error + cross_track_steering;
 
     // 8. Low-Pass Filter
-
+    const double alpha = params_->stanley_alpha_; // stability(0.0) <---> response(1.0)
     double filtered_steering_angle = alpha * steering_angle + (1.0 - alpha) * last_filtered_steering_angle_;
     last_filtered_steering_angle_ = filtered_steering_angle;
 
@@ -2271,7 +2152,19 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     // Behavior planning
     setRacingStrategy(vehicle_state, cones_for_planning);
 
+    // Select parameters based on the current driving mode
+    const auto& current_planning_params = (current_mode_ == DrivingMode::RACING) 
+                                          ? planning_params_->trajectory_generation.racing_mode 
+                                          : planning_params_->trajectory_generation.mapping_mode;
 
+    // Generate trajectory based on the current driving mode
+    if (current_mode_ == DrivingMode::RACING && is_global_path_generated_) {
+        // In RACING mode, follow the pre-calculated global path
+        trajectory_points_ = trajectory_generator_->getTrajectoryFromGlobalPath(vehicle_state, global_path_, current_planning_params);
+
+    } else {
+        // In MAPPING mode, generate a simple and stable path for mapping
+        trajectory_points_ = trajectory_generator_->generatePathFromClosestCones(cones_for_planning, current_planning_params);
     }
 
     // =================================================================
@@ -2485,7 +2378,7 @@ void FormulaAutonomousSystem::updateLapCount(const VehicleState& current_state) 
     // This prevents re-triggering if the car wiggles across the line.
     double dist_from_line_center = (car_position_vec - start_finish_line_center_).norm();
 
-    if (just_crossed_line_ && dist_from_line_center > 10.0) { // Reset distance 10.0m
+    if (just_crossed_line_ && dist_from_line_center > 10.0) { // 10m 이상 멀어지면 리셋
         just_crossed_line_ = false;
     }
 }
