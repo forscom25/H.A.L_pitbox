@@ -2378,7 +2378,7 @@ void FormulaAutonomousSystem::updateLapCount(const VehicleState& current_state) 
     // This prevents re-triggering if the car wiggles across the line.
     double dist_from_line_center = (car_position_vec - start_finish_line_center_).norm();
 
-    if (just_crossed_line_ && dist_from_line_center > 10.0) { // 10m 이상 멀어지면 리셋
+    if (just_crossed_line_ && dist_from_line_center > 10.0) { // Reset distance 10.0m
         just_crossed_line_ = false;
     }
 }

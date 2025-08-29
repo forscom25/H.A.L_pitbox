@@ -71,8 +71,8 @@ bool FormulaAutonomousSystemNode::init(){
     lap_count_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lap_count_marker", 1);
     global_cones_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/global_cones_marker", 1);
     lane_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lane_marker", 1);
-    global_path_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("/fsds/global_path", 1);                                // Globalpath
-    trajectory_from_global_path_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("/fsds/rajectory_from_global_path", 1); // TrajectoryFromGlobalpath
+    global_path_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("/fsds/global_path", 1);                                 // Globalpath
+    trajectory_from_global_path_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("/fsds/trajectory_from_global_path", 1); // TrajectoryFromGlobalpath
     
     // Get parameters
     pnh_.getParam("/system/main_loop_rate", main_loop_rate_);
@@ -538,8 +538,6 @@ void FormulaAutonomousSystemNode::publishLaneMarker() {
 }
 
 // For lap counting
-
-
 
 void FormulaAutonomousSystemNode::publishStartFinishLineMarker() {
 

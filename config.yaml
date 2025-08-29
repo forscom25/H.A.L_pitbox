@@ -174,7 +174,7 @@ control:
 
   Stanley:
     k_gain: 0.9
-    k_gain_curvature_boost: 1.2
+    k_gain_curvature_boost: 1.5
     alpha: 1.0 # (stability(0.0) <---> response(1.0))
 
   # PID Speed Control Parameters

@@ -2018,5 +2018,4 @@ public:
     std::vector<TrajectoryPoint> trajectory_points_;
 };
 
-
 #endif // FORMULA_AUTONOMOUS_SYSTEM_HPP
