@@ -131,7 +131,7 @@ mapping:
 
   # Cone sorting parameters for lane generation
   max_connection_distance: 15.0
-  direction_weight: 0.5 # Path direction consistency weight (0.0 ~ 1.0)
+
 
   # Cone map refinement parameters
   max_dist_from_lane: 2.0
@@ -140,23 +140,7 @@ mapping:
 # Planning Parameters
 # ===========================================
 planning:
-  trajectory_generation:
-    # Parameters used during the MAPPING lap
-    mapping_mode:
-      lookahead_distance: 3.0
-      waypoint_spacing: 0.2
-      max_speed: 3.0
-      lane_offset: 2.0
 
-    # Parameters used during the RACING laps
-    racing_mode:
-      lookahead_distance: 15.0
-      waypoint_spacing: 0.5
-      max_speed: 10.0
-      min_speed: 3.0
-      curvature_gain: 1.5
-
-  behavioral_logic:
     # Lap Counting & Race Logic
     total_laps: 10
 
