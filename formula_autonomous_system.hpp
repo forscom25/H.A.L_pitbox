@@ -1437,7 +1437,7 @@ struct ControlParams {
     // ===================  Stanley Controller Parameters =================== 
     double k_gain_; // Stanley controller gain k
     double k_gain_curvature_boost_; // k boost depending on curvature
-    double stanley_alpha_; // Low-Pass Filter alpha
+
 
     // =================== Longitudinal Control: PID Controller ===================
     double pid_kp_;                    // proportional gain
@@ -1462,7 +1462,7 @@ struct ControlParams {
         // ===================  Stanley Controller Parameters =================== 
         if(!pnh.getParam("/control/Stanley/k_gain", k_gain_)){std::cerr<<"Param control/Stanley/k_gain has error" << std::endl; return false;}
         if(!pnh.getParam("/control/Stanley/k_gain_curvature_boost", k_gain_curvature_boost_)){std::cerr<<"Param control/Stanley/k_gain_curvature_boost has error" << std::endl; return false;}
-        if(!pnh.getParam("/control/Stanley/alpha", stanley_alpha_)){std::cerr<<"Param control/Stanley/alpha has error" << std::endl; return false;}
+
         
         // =================== Longitudinal Control: PID Controller ===================
         if(!pnh.getParam("/control/SpeedControl/pid_kp", pid_kp_)){std::cerr<<"Param control/SpeedControl/pid_kp has error" << std::endl; return false;}
@@ -1773,9 +1773,7 @@ public:
     ~TrajectoryGenerator() = default;
     
     // Generate trajectory from cones and current planning state(for Mapping mode)
-    std::vector<TrajectoryPoint> generatePathFromClosestCones(const std::vector<Cone>& cones, const PlanningParams::TrajectoryModeParams& params);
-    // Generate local trajectory by following the global path (for RACING mode)
-    std::vector<TrajectoryPoint> getTrajectoryFromGlobalPath(const VehicleState& vehicle_state, const std::vector<TrajectoryPoint>& global_path, const PlanningParams::TrajectoryModeParams& params);
+
 
     /**
      * @brief Get last generated trajectory
