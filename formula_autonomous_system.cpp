@@ -15,7 +15,7 @@
 
 // =================================================================================================
 // ========================================= 1. PERCEPTION =========================================
-// ===============================================================================================
+// =================================================================================================
 
 // =================== RoiExtractor Implementation ===================
 
@@ -285,12 +285,15 @@ bool Clustering::isValidCone(const std::vector<int>& cluster_indices,
     if (cluster_indices.size() < params_->lidar_cone_detection_min_points_) 
         is_valid = false; // Too few points
     
-    // Calculate height range
+    // Calculate cone detection range
     float min_x = std::numeric_limits<float>::max();
     float max_x = std::numeric_limits<float>::lowest();
 
     float min_y = std::numeric_limits<float>::max();
     float max_y = std::numeric_limits<float>::lowest();
+
+    float min_z = std::numeric_limits<float>::max();
+    float max_z = std::numeric_limits<float>::lowest();
 
     for (int idx : cluster_indices) {
         min_x = std::min(min_x, cloud->points[idx].x);
@@ -298,6 +301,15 @@ bool Clustering::isValidCone(const std::vector<int>& cluster_indices,
 
         min_y = std::min(min_y, cloud->points[idx].y);
         max_y = std::max(max_y, cloud->points[idx].y);
+
+        min_z = std::min(min_z, cloud->points[idx].z);
+        max_z = std::max(max_z, cloud->points[idx].z);
+    }
+
+    float height = max_z - min_z;
+
+    if (height < params_->lidar_cone_detection_min_height_ || height > params_->lidar_cone_detection_max_height_) {
+        is_valid = false;
     }
     
     float x_range = max_x - min_x;
@@ -594,45 +606,20 @@ std::string ColorDetection::detectConeColor(const Cone& cone, const cv::Mat& rgb
 }
 
 cv::Mat ColorDetection::preprocessImage(const cv::Mat& rgb_image) {
-    if (!params_->camera_enable_preprocessing_) {
-        return rgb_image;
-    }
-    
     cv::Mat processed = rgb_image.clone();
 
-    // =================================================================
-    // <<< 새로운 기능: LAB 색 공간에서 CLAHE를 이용한 안개 보정 >>>
-    // =================================================================
-    if (params_->camera_enable_fog_correction_) {
-        // 이미지를 BGR에서 LAB 색 공간으로 변환. L 채널이 밝기 정보를 담고 있음음
-        cv::Mat lab_image;
-        cv::cvtColor(processed, lab_image, cv::COLOR_BGR2Lab);
-
-        // LAB 이미지를 각 채널(L, A, B)로 분리
-        std::vector<cv::Mat> lab_channels(3);
-        cv::split(lab_image, lab_channels);
-
-        // CLAHE 객체를 생성하고 설정값을 적용
-        cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE();
-        clahe->setClipLimit(params_->camera_clahe_clip_limit_);
-        clahe->setTilesGridSize(cv::Size(params_->camera_clahe_tile_grid_size_, params_->camera_clahe_tile_grid_size_)); // 
-
-        // L 채널에 CLAHE를 적용하여 대비를 향상시킴
-        cv::Mat enhanced_l_channel;
-        clahe->apply(lab_channels[0], enhanced_l_channel);
-
-        // 향상된 L 채널과 기존의 A, B 채널을 다시 합침
-        lab_channels[0] = enhanced_l_channel;
-        cv::merge(lab_channels, lab_image);
-
-        // 처리된 LAB 이미지를 다시 BGR 색 공간으로 변환
-        cv::cvtColor(lab_image, processed, cv::COLOR_Lab2BGR);
+    // Apply defogging if enabled
+    if (params_->camera_enable_defogging_) {
+        processed = defogImage(processed);
     }
-    // =================================================================
-    // <<< 새로운 기능 종료 >>>
-    // =================================================================
+
+    // If general preprocessing is disabled, we might still want defogging.
+    // So, we check for the preprocessing flag after the defogging step.
+    if (!params_->camera_enable_preprocessing_) {
+        return processed;
+    }
     
-    // 노이즈 감소를 위한 가우시안 블러 적용
+    // Apply Gaussian blur for noise reduction
     if (params_->camera_gaussian_blur_sigma_ > 0) {
         int kernel_size = static_cast<int>(2 * params_->camera_gaussian_blur_sigma_ * 3 + 1);
         if (kernel_size % 2 == 0) kernel_size++;
@@ -642,7 +629,7 @@ cv::Mat ColorDetection::preprocessImage(const cv::Mat& rgb_image) {
                         params_->camera_gaussian_blur_sigma_);
     }
     
-    // 경계선을 보존하며 노이즈를 제거하는 양방향 필터 적용
+    // Apply bilateral filter for edge-preserving smoothing
     if (params_->camera_bilateral_filter_d_ > 0) {
         cv::Mat temp;
         cv::bilateralFilter(processed, temp, 
@@ -652,6 +639,84 @@ cv::Mat ColorDetection::preprocessImage(const cv::Mat& rgb_image) {
     }
     
     return processed;
+}
+
+/**
+ * @brief Dark Channel Prior 알고리즘을 사용하여 이미지의 안개를 제거합니다.
+ * @param image 안개가 낀 원본 이미지 (BGR)
+ * @return cv::Mat 안개가 제거된 이미지
+ */
+cv::Mat ColorDetection::defogImage(const cv::Mat& image) {
+    if (image.empty()) {
+        return image;
+    }
+
+    // 파라미터 설정
+    int patch_size = 15; // 다크 채널 계산 시 사용할 패치 크기
+    double omega = 0.95; // 안개 제거 강도 조절 (원본 느낌을 남길 비율)
+    double t0 = 0.1;     // 최소 transmission 값
+
+    cv::Mat img_norm;
+    image.convertTo(img_norm, CV_64FC3, 1.0 / 255.0); // 정규화
+
+    // 1. Dark Channel 계산
+    cv::Mat dark_channel(img_norm.rows, img_norm.cols, CV_64FC1);
+    for (int y = 0; y < img_norm.rows; ++y) {
+        for (int x = 0; x < img_norm.cols; ++x) {
+            cv::Vec3d pixel = img_norm.at<cv::Vec3d>(y, x);
+            dark_channel.at<double>(y, x) = std::min({pixel[0], pixel[1], pixel[2]});
+        }
+    }
+    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(patch_size, patch_size));
+    cv::erode(dark_channel, dark_channel, kernel);
+
+    // 2. 대기광(Atmospheric Light) 추정
+    // 다크 채널에서 가장 밝은 0.1% 픽셀들의 평균값을 대기광으로 추정
+    cv::Mat flat_dark = dark_channel.reshape(1, 1);
+    cv::Mat sorted_indices;
+    cv::sortIdx(flat_dark, sorted_indices, cv::SORT_EVERY_ROW + cv::SORT_DESCENDING);
+    
+    double atmospheric_light[3] = {0.0, 0.0, 0.0};
+    int num_pixels_to_avg = static_cast<int>(flat_dark.cols * 0.001);
+    
+    cv::Vec3d A(0,0,0);
+    for (int i = 0; i < num_pixels_to_avg; ++i) {
+        int idx = sorted_indices.at<int>(0, i);
+        int y = idx / img_norm.cols;
+        int x = idx % img_norm.cols;
+        A += img_norm.at<cv::Vec3d>(y, x);
+    }
+    A /= num_pixels_to_avg;
+
+    // 3. Transmission Map 추정
+    cv::Mat transmission(img_norm.rows, img_norm.cols, CV_64FC1);
+    for (int y = 0; y < img_norm.rows; ++y) {
+        for (int x = 0; x < img_norm.cols; ++x) {
+            cv::Vec3d pixel = img_norm.at<cv::Vec3d>(y, x);
+            double min_val = std::min({pixel[0] / A[0], pixel[1] / A[1], pixel[2] / A[2]});
+            transmission.at<double>(y, x) = 1.0 - omega * min_val;
+        }
+    }
+    cv::erode(transmission, transmission, kernel);
+
+    // 4. 안개 제거된 이미지 복원
+    cv::Mat J(img_norm.rows, img_norm.cols, CV_64FC3);
+    for (int y = 0; y < img_norm.rows; ++y) {
+        for (int x = 0; x < img_norm.cols; ++x) {
+            double t = std::max(transmission.at<double>(y, x), t0);
+            for (int c = 0; c < 3; ++c) {
+                J.at<cv::Vec3d>(y, x)[c] = (img_norm.at<cv::Vec3d>(y, x)[c] - A[c]) / t + A[c];
+            }
+        }
+    }
+    
+    // 픽셀 값이 0~1 범위를 벗어나지 않도록 클리핑 후 8비트 이미지로 변환
+    cv::Mat result;
+    J.convertTo(result, CV_8UC3, 255.0);
+    cv::max(result, 0, result);
+    cv::min(result, 255, result);
+
+    return result;
 }
 
 ColorConfidence ColorDetection::analyzeColorWindow(const cv::Mat& hsv_image, const cv::Point2f& center, int window_size) {
@@ -1067,24 +1132,26 @@ std::vector<Eigen::Vector2d> MapManager::sortConesByProximity(const std::vector<
     const double max_connection_distance = params_->max_connection_distance_;
     const double direction_weight = params_->direction_weight_;
 
-    // Start from the cone with the smallest x coordinate (closest to the vehicle)
+    // Start sorting from the cone closest to the vehicle's origin (0,0),
+    // which represents the "first" cone encountered.
     auto start_it = std::min_element(remaining_cones.begin(), remaining_cones.end(),
         [](const Eigen::Vector2d& a, const Eigen::Vector2d& b) {
-            return a.x() < b.x();
+            // squaredNorm() calculates the squared distance from the origin.
+            return a.squaredNorm() < b.squaredNorm();
         });
 
     sorted_cones.push_back(*start_it);
     remaining_cones.erase(start_it);
 
-    // Vehicle heading(x) as initial direction
-    Eigen::Vector2d current_direction(1.0, 0.0);
+    // Initial direction is from the origin to the first cone.
+    Eigen::Vector2d current_direction = sorted_cones.front().normalized();
     
     // Repeat until all cones are sorted
     while (!remaining_cones.empty()) {
 
         Eigen::Vector2d current_point = sorted_cones.back();
         
-        // Update direction vector
+        // Update direction vector based on the last two sorted cones
         if (sorted_cones.size() > 1) {
             current_direction = (sorted_cones.back() - sorted_cones[sorted_cones.size() - 2]).normalized();
         }
@@ -1093,20 +1160,18 @@ std::vector<Eigen::Vector2d> MapManager::sortConesByProximity(const std::vector<
         auto best_it = remaining_cones.begin();
 
         for (auto it = remaining_cones.begin(); it != remaining_cones.end(); ++it) {
-            double dist = (it->x() - current_point.x()) * (it->x() - current_point.x()) +
-                             (it->y() - current_point.y()) * (it->y() - current_point.y());
-            dist = std::sqrt(dist);
+            double dist = (*it - current_point).norm();
 
-            // noise filter
+            // Skip cones that are too far away
             if (dist > max_connection_distance) {
                 continue;
             }
 
-            // Cost function based on direction vectors
+            // Cost function based on distance and direction consistency
             Eigen::Vector2d candidate_direction = (*it - current_point).normalized();
-            double dot_product = current_direction.dot(candidate_direction); // scalar product of two direction vector (correlation)
+            double dot_product = current_direction.dot(candidate_direction);
 
-            // Cost function(lower the better)
+            // Lower score is better. Penalize directions that deviate from the current path.
             double score = dist * (1.0 + direction_weight * (1.0 - dot_product));
 
             if (score < best_score) {
@@ -1115,9 +1180,34 @@ std::vector<Eigen::Vector2d> MapManager::sortConesByProximity(const std::vector<
             }
         }
 
-
+        // If a large gap is detected (no cone found within max_connection_distance)
         if (best_score == std::numeric_limits<double>::max()) {
             break;
+
+            if (remaining_cones.empty()) {
+                break; // No more cones left to process.
+            }
+
+            ROS_WARN("MapManager: Large gap detected. Jumping to the next spatially closest cone.");
+
+            // Find the absolute closest cone to bridge the gap
+            auto closest_after_gap_it = remaining_cones.begin();
+            double min_dist_after_gap = std::numeric_limits<double>::max();
+
+            for (auto it = remaining_cones.begin(); it != remaining_cones.end(); ++it) {
+                double dist = (*it - current_point).norm();
+
+                if (dist < min_dist_after_gap) {
+                    min_dist_after_gap = dist;
+                    closest_after_gap_it = it;
+                }
+            }
+
+            best_it = closest_after_gap_it; // Force the connection
+        }
+
+        if (best_it == remaining_cones.end()) { // Safety check
+             break;
         }
 
         sorted_cones.push_back(*best_it);
@@ -1143,6 +1233,27 @@ void MapManager::generateLanesFromMemory() {
     // Sort cones by proximity
     auto sorted_blue = sortConesByProximity(blue_cones);
     auto sorted_yellow = sortConesByProximity(yellow_cones);
+
+    // To create a closed loop, check if the last and first cones are close enough to connect.
+    if (sorted_blue.size() > 2) {
+
+        double dist = (sorted_blue.back() - sorted_blue.front()).norm();
+
+        if (dist < params_->max_connection_distance_) {
+            sorted_blue.push_back(sorted_blue.front()); // Add the first point to the end
+            ROS_INFO_ONCE("MapManager: Blue lane is now a closed loop.");
+        }
+    }
+
+    if (sorted_yellow.size() > 2) {
+
+        double dist = (sorted_yellow.back() - sorted_yellow.front()).norm();
+
+        if (dist < params_->max_connection_distance_) {
+            sorted_yellow.push_back(sorted_yellow.front()); // Add the first point to the end
+            ROS_INFO_ONCE("MapManager: Yellow lane is now a closed loop.");
+        }
+    }
 
     // Generate spline for left lane (blue cones)
     left_lane_points_.clear();
@@ -1269,6 +1380,7 @@ void MapManager::refineConeMap() {
         if (closest_lane_dist < max_dist_threshold) {// noise filter
             
             Cone refined_cone = cone;
+
             if (min_dist_to_left_lane < min_dist_to_right_lane) {
                 refined_cone.color = "blue";
             } else {
@@ -1489,24 +1601,19 @@ TrajectoryGenerator::TrajectoryGenerator(const std::shared_ptr<PlanningParams>& 
 {
     last_trajectory_.clear();
 
-    std::cout << "TrajectoryGenerator: Initialized with lookahead " 
-              << params_->lookahead_distance_ << "m, spacing " 
-              << params_->waypoint_spacing_ << "m" << std::endl;
+    std::cout << "TrajectoryGenerator: Initialized with default mapping lookahead " 
+              << params_->trajectory_generation.mapping_mode.lookahead_distance_ << "m, spacing " 
+              << params_->trajectory_generation.mapping_mode.waypoint_spacing_ << "m" << std::endl;
 }
 
-std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(const std::vector<Cone>& cones, ASState planning_state)
+std::vector<TrajectoryPoint> TrajectoryGenerator::generatePathFromClosestCones(const std::vector<Cone>& cones, const PlanningParams::TrajectoryModeParams& params)
 {
     last_trajectory_.clear();
 
-    if (planning_state != ASState::AS_DRIVING) {
-        return generateStopTrajectory();
-    }
-    
+    // 1. Filter blue and yellow cones
     std::vector<Eigen::Vector2d> blue_cones_local, yellow_cones_local;
-
-    // Filter cones based on color and position
     for (const auto& cone : cones) {
-        if (cone.center.x > 0.1) { // Only consider cones in front of the vehicle
+        if (cone.center.x > 0.1) { // Use only cones in front of the vehicle
             if (cone.color == "blue") {
                 blue_cones_local.push_back(Eigen::Vector2d(cone.center.x, cone.center.y));
             } else if (cone.color == "yellow") {
@@ -1514,133 +1621,113 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(const std::
             }
         }
     }
-    
-    // If no cones are detected, generate a default trajectory
-    if (blue_cones_local.empty() && yellow_cones_local.empty()) {
-        int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_);
-        for (int i = 0; i <= num_points; ++i) {
-            double x = i * params_->waypoint_spacing_;
-            last_trajectory_.emplace_back(x, 0.0, 0.0, 0.0, params_->default_speed_, x);
-        }
-        return last_trajectory_;
-    }
-    
-    std::vector<Eigen::Vector2d> path_points;
 
-    // Start with the vehicle's current position
-    path_points.push_back(Eigen::Vector2d(0.0, 0.0));
+    // 2. Find the closest blue and yellow cone from the vehicle's origin (0,0)
+    auto find_closest_cone = [](const std::vector<Eigen::Vector2d>& cone_list) {
+        if (cone_list.empty()) return Eigen::Vector2d(0.0, 0.0);
+        return *std::min_element(cone_list.begin(), cone_list.end(),
+            [](const Eigen::Vector2d& a, const Eigen::Vector2d& b) {
+                return a.squaredNorm() < b.squaredNorm();
+            });
+    };
 
-    int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_);
-    for (int i = 1; i <= num_points; ++i) {
-        double target_x = i * params_->waypoint_spacing_;
-        
-        Eigen::Vector2d* closest_blue = nullptr;
-        Eigen::Vector2d* closest_yellow = nullptr;
-        double min_blue_dist = 1.5, min_yellow_dist = 1.5;
-        
-        // Find the closest blue and yellow cones to the target x position
-        for (auto& cone_pos : blue_cones_local) {
-            double dist = std::abs(cone_pos.x() - target_x);
-            if (dist < min_blue_dist) {
-                min_blue_dist = dist;
-                closest_blue = &cone_pos;
-            }
-        }
-        for (auto& cone_pos : yellow_cones_local) {
-            double dist = std::abs(cone_pos.x() - target_x);
-            if (dist < min_yellow_dist) {
-                min_yellow_dist = dist;
-                closest_yellow = &cone_pos;
-            }
-        }
-        
-        Eigen::Vector2d waypoint(target_x, 0.0);
+    Eigen::Vector2d closest_blue = find_closest_cone(blue_cones_local);
+    Eigen::Vector2d closest_yellow = find_closest_cone(yellow_cones_local);
 
-        // Calculate the y position based on the closest cones
-        if (closest_blue && closest_yellow) {
-            waypoint.y() = (closest_blue->y() + closest_yellow->y()) * 0.5;
+    // 3. Calculate the target y-coordinate (target_y)
+    double target_y = 0.0;
+    bool target_found = false;
 
-        } else if (closest_blue) {
-            waypoint.y() = closest_blue->y() - params_->lane_offset_;
-
-        } else if (closest_yellow) {
-            waypoint.y() = closest_yellow->y() + params_->lane_offset_;
-
-        // Extrapolation logic
-        } else if (path_points.size() >= 2) {
-
-            // Predict future trajectory based on trajectory history
-            Eigen::Vector2d last_point = path_points.back();
-            Eigen::Vector2d prev_point = path_points[path_points.size() - 2];
-
-            double dx = last_point.x() - prev_point.x();
-            double dy = last_point.y() - prev_point.y();
-           
-            if (std::abs(dx) > 1e-6) { // prevent 0 division
-                double slope = dy / dx;
-                // 마지막 점에서 동일한 기울기로 연장하여 y좌표 예측
-                waypoint.y() = last_point.y() + slope * (target_x - last_point.x());
-            } else {
-                // 수직에 가까운 경우, 이전 y값을 그대로 사용
-                waypoint.y() = last_point.y();
-            }
-
-        } else if (!path_points.empty()) {
-            // 경로점이 하나만 있을 경우, 이전 y값을 그대로 사용 (직진)
-            waypoint.y() = path_points.back().y();
-        }
-
-        path_points.push_back(waypoint);
+    if (!closest_blue.isZero() && !closest_yellow.isZero()) {
+        // If both cones are found, set the target to their midpoint
+        target_y = (closest_blue.y() + closest_yellow.y()) * 0.5;
+        target_found = true;
+    } else if (!closest_blue.isZero()) {
+        // If only a blue cone is found, offset to the right by a constant distance
+        target_y = closest_blue.y() - params.lane_offset_;
+        target_found = true;
+    } else if (!closest_yellow.isZero()) {
+        // If only a yellow cone is found, offset to the left by a constant distance
+        target_y = closest_yellow.y() + params.lane_offset_;
+        target_found = true;
     }
 
-    // Use Parametric Spline
-    if (path_points.size() >= 2) {
-
-        std::vector<double> s_pts, x_pts, y_pts;
-
-        s_pts.push_back(0.0); // 0 accumalated distance at the start
-        x_pts.push_back(path_points[0].x());
-        y_pts.push_back(path_points[0].y());
-
-        // 각 경로점까지의 누적 거리(s)를 계산
-        for (size_t i = 1; i < path_points.size(); ++i) {
-
-            double dist = (path_points[i] - path_points[i - 1]).norm();
-
-            s_pts.push_back(s_pts.back() + dist);
-            x_pts.push_back(path_points[i].x());
-            y_pts.push_back(path_points[i].y());
-        }
-
-        // x와 y를 각각의 스플라인으로 생성 (x = fx(s), y = fy(s))
-        tk::spline spline_x, spline_y;
-        spline_x.set_points(s_pts, x_pts);
-        spline_y.set_points(s_pts, y_pts);
-
-        // Generate trajectory points from the path
-        double total_length = s_pts.back();
-        for (double s = 0; s < total_length; s += 0.5) { // 0.5m 간격으로 점 생성
-            double x = spline_x(s);
-            double y = spline_y(s);
-
-            // 1차 미분값을 이용해 경로의 접선 각도(yaw) 계산
-            double dx = spline_x.deriv(1, s);
-            double dy = spline_y.deriv(1, s);
-            double yaw = std::atan2(dy, dx);
-
-            // 1차, 2차 미분값을 이용해 곡률(curvature) 계산
-            double ddx = spline_x.deriv(2, s);
-            double ddy = spline_y.deriv(2, s);
-            double curvature = std::abs(dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
-
-            // 곡률 기반 속도 계획
-            double desired_speed = params_->max_speed_ / (1.0 + params_->curvature_gain_ * std::abs(curvature));
-            double target_speed = std::max(params_->min_speed_, std::min(desired_speed, params_->max_speed_));
-
-            last_trajectory_.emplace_back(x, y, yaw, curvature, target_speed, s);
-        }
+    // 4. Generate a simple straight path towards the target point
+    int num_points = static_cast<int>(params.lookahead_distance_ / params.waypoint_spacing_);
+    for (int i = 0; i <= num_points; ++i) {
+        double x = i * params.waypoint_spacing_;
+        // If a cone is found, aim for the target_y; otherwise, go straight (y=0)
+        double y = target_found ? (x / params.lookahead_distance_) * target_y : 0.0;
+        
+        last_trajectory_.emplace_back(x, y, 0.0, 0.0, params.max_speed_, x);
     }
     
+    // Calculate the yaw for the path (simply the angle between two points)
+    if (last_trajectory_.size() >= 2) {
+        for(size_t i = 0; i < last_trajectory_.size() - 1; ++i) {
+            double dx = last_trajectory_[i+1].position.x() - last_trajectory_[i].position.x();
+            double dy = last_trajectory_[i+1].position.y() - last_trajectory_[i].position.y();
+            last_trajectory_[i].yaw = std::atan2(dy, dx);
+        }
+        last_trajectory_.back().yaw = last_trajectory_[last_trajectory_.size() - 2].yaw;
+    }
+
+    return last_trajectory_;
+}
+
+/**
+ * @brief Generates a local trajectory for the controller by extracting and transforming a segment from the global path.
+ * @param vehicle_state The current state of the vehicle in the global frame.
+ * @param global_path The pre-computed global path.
+ * @return A local trajectory in the vehicle's coordinate frame.
+ */
+
+std::vector<TrajectoryPoint> TrajectoryGenerator::getTrajectoryFromGlobalPath(const VehicleState& vehicle_state, const std::vector<TrajectoryPoint>& global_path, const PlanningParams::TrajectoryModeParams& params)
+{   
+    last_trajectory_.clear();
+    last_local_path_points_.clear();
+    if (global_path.size() < 2) return last_trajectory_;
+
+    double vehicle_yaw = vehicle_state.yaw;
+    Eigen::Vector2d vehicle_pos = vehicle_state.position;
+
+    // 1. Find the closest point on the global path to the vehicle.
+    auto closest_it = std::min_element(global_path.begin(), global_path.end(),
+        [&](const TrajectoryPoint& a, const TrajectoryPoint& b) {
+            return (a.position - vehicle_pos).squaredNorm() < (b.position - vehicle_pos).squaredNorm();
+        });
+    size_t start_idx = std::distance(global_path.begin(), closest_it);
+
+    // 2. Extract a segment of the path from the starting point.
+    double traversed_s = 0.0;
+    for (size_t i = 0; i < global_path.size(); ++i) {
+        size_t current_idx = (start_idx + i) % global_path.size();
+        const auto& global_point = global_path[current_idx];
+
+        if (i > 0) {
+            size_t prev_idx = (start_idx + i - 1) % global_path.size();
+            traversed_s += (global_point.position - global_path[prev_idx].position).norm();
+        }
+
+        if (traversed_s > params.lookahead_distance_) {
+            break;
+        }
+
+        // 3. Transform the global point to the vehicle's local coordinate frame.
+        Eigen::Vector2d relative_pos = global_point.position - vehicle_pos;
+        double x_local = relative_pos.x() * cos(-vehicle_yaw) - relative_pos.y() * sin(-vehicle_yaw);
+        double y_local = relative_pos.x() * sin(-vehicle_yaw) + relative_pos.y() * cos(-vehicle_yaw);
+        
+        // Normalize angle to be within [-PI, PI]
+        double yaw_local = global_point.yaw - vehicle_yaw;
+        while (yaw_local > M_PI) yaw_local -= 2.0 * M_PI;
+        while (yaw_local < -M_PI) yaw_local += 2.0 * M_PI;
+
+        // Add the transformed point with pre-calculated data to the local trajectory
+        last_trajectory_.emplace_back(x_local, y_local, yaw_local, global_point.curvature, global_point.speed, global_point.s);
+        last_local_path_points_.emplace_back(x_local, y_local); // For visualization
+    }
+
     return last_trajectory_;
 }
 
@@ -1690,13 +1777,85 @@ void TrajectoryGenerator::printTrajectoryStats() const
 std::vector<TrajectoryPoint> TrajectoryGenerator::generateStopTrajectory()
 {
     last_trajectory_.clear();
-    // 전방 지점들에 대해 중앙점 계산
-    int num_points = static_cast<int>(params_->lookahead_distance_ / params_->waypoint_spacing_);
+    // Use mapping_mode parameters for the stop trajectory as a default
+    const auto& params = params_->trajectory_generation.mapping_mode;
+    int num_points = static_cast<int>(params.lookahead_distance_ / params.waypoint_spacing_);
     for (int i = 0; i < num_points; ++i) {
-        double x = i * params_->waypoint_spacing_;
+        double x = i * params.waypoint_spacing_;
         last_trajectory_.emplace_back(x, 0.0, 0.0, 0.0, 0.0, x);
     }
     return last_trajectory_;
+}
+
+void FormulaAutonomousSystem::generateGlobalPath() {
+    global_path_.clear();
+
+    auto track_lanes = map_manager_->getTrackLanes();
+    const auto& left_lane = track_lanes.first;
+    const auto& right_lane = track_lanes.second;
+
+    if (left_lane.size() < 2 || right_lane.size() < 2) {
+        ROS_ERROR("MapManager: Not enough lane points to generate a global path.");
+        return;
+    }
+
+    // 1. Calculate the center points of the track.
+    std::vector<Eigen::Vector2d> center_points;
+    for (const auto& left_point : left_lane) {
+        auto closest_right_it = std::min_element(right_lane.begin(), right_lane.end(),
+            [&](const Eigen::Vector2d& a, const Eigen::Vector2d& b) {
+                return (a - left_point).squaredNorm() < (b - left_point).squaredNorm();
+            });
+        Eigen::Vector2d center_point = (*closest_right_it + left_point) / 2.0;
+        if (center_points.empty() || (center_points.back() - center_point).norm() > 0.1) {
+            center_points.push_back(center_point);
+        }
+    }
+    if (center_points.size() < 3) {
+        ROS_ERROR("MapManager: Failed to generate sufficient center points for the global path.");
+        return;
+    }
+
+    // 2. Connect the center points with a smooth spline curve.
+    std::vector<double> s_pts, x_pts, y_pts;
+    s_pts.push_back(0.0);
+    x_pts.push_back(center_points[0].x());
+    y_pts.push_back(center_points[0].y());
+    for (size_t i = 1; i < center_points.size(); ++i) {
+        double dist = (center_points[i] - center_points[i - 1]).norm();
+        s_pts.push_back(s_pts.back() + dist);
+        x_pts.push_back(center_points[i].x());
+        y_pts.push_back(center_points[i].y());
+    }
+
+    tk::spline spline_x, spline_y;
+    spline_x.set_points(s_pts, x_pts);
+    spline_y.set_points(s_pts, y_pts);
+
+    // 3. Sample points along the spline to calculate curvature and target speed for RACING mode.
+    double total_length = s_pts.back();
+    const auto& params = planning_params_->trajectory_generation.racing_mode; // Use RACING parameters
+
+    for (double s = 0; s < total_length; s += 0.5) { // Sample every 0.5m
+        double x = spline_x(s);
+        double y = spline_y(s);
+
+        // Calculate yaw and curvature accurately using 1st and 2nd derivatives
+        double dx = spline_x.deriv(1, s);
+        double dy = spline_y.deriv(1, s);
+        double ddx = spline_x.deriv(2, s);
+        double ddy = spline_y.deriv(2, s);
+        
+        double yaw = std::atan2(dy, dx);
+        double curvature = std::abs(dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
+
+        // Plan speed based on curvature
+        double speed = params.max_speed_ / (1.0 + params.curvature_gain_ * curvature);
+        speed = std::max(params.min_speed_, std::min(speed, params.max_speed_));
+
+        // Store the complete TrajectoryPoint in the global_path_
+        global_path_.emplace_back(x, y, yaw, curvature, speed, s);
+    }
 }
 
 // ================================================================================================
@@ -1704,105 +1863,130 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateStopTrajectory()
 // ================================================================================================
 
 // ================== PurePursuit Controller Implementation ===================
+PurePursuit::PurePursuit() {}
 
-PurePursuit::PurePursuit(const std::shared_ptr<ControlParams>& params)
-    : params_(params) {
-}
+double PurePursuit::calculateSteeringAngle(const VehicleState& current_state,
+                                          const std::vector<TrajectoryPoint>& path,
+                                          const ControlParams::ControllerModeParams& params,
+                                          const double& vehicle_length) const {
 
-double PurePursuit::calculateSteeringAngle(const VehicleState& current_state, const std::vector<TrajectoryPoint>& path) const {
     if (path.empty()) {
         return 0.0;
     }
 
-    int target_idx = findTargetPointIndex(path);
+    int target_idx = findTargetPointIndex(path, params);
     const Eigen::Vector2d& target_point = path[target_idx].position;
 
-    return calculateSteeringAngleInternal(target_point);
+    return calculateSteeringAngleInternal(target_point, params, vehicle_length);
 }
 
-int PurePursuit::findTargetPointIndex(const std::vector<TrajectoryPoint>& path) const {
+int PurePursuit::findTargetPointIndex(const std::vector<TrajectoryPoint>& path, const ControlParams::ControllerModeParams& params) const {
+
     int target_idx = 0;
-    for (int i = 0; i < path.size(); ++i) {
-        int current_idx = i % path.size();
-        double dist_from_car = path[current_idx].position.norm();
-        
-        if (dist_from_car >= params_->pp_lookahead_distance_) {
-            target_idx = current_idx;
+    for (size_t i = 0; i < path.size(); ++i) {
+        double dist_from_car = path[i].position.norm();
+
+        if (dist_from_car >= params.pp_lookahead_distance_) {
+            target_idx = i;
             break;
         }
     }
     return target_idx;
 }
 
-double PurePursuit::calculateSteeringAngleInternal(const Eigen::Vector2d& target_point) const {
-    double alpha = std::atan2(target_point.y(), target_point.x() + params_->vehicle_length_ * 0.5); // local trajectory is defined at the center of the vehicle
-    double delta = std::atan2(2.0 * params_->vehicle_length_ * std::sin(alpha), params_->pp_lookahead_distance_);
-    
-    return std::clamp(delta, -params_->pp_max_steer_angle_, params_->pp_max_steer_angle_);
+double PurePursuit::calculateSteeringAngleInternal(const Eigen::Vector2d& target_point,
+                                                   const ControlParams::ControllerModeParams& params,
+                                                   const double& vehicle_length) const {
+
+    double alpha = std::atan2(target_point.y(), target_point.x() + vehicle_length * 0.5); // local trajectory is defined at the center of the vehicle
+    double delta = std::atan2(2.0 * vehicle_length * std::sin(alpha), params.pp_lookahead_distance_);
+
+    return std::clamp(delta, -params.pp_max_steer_angle_, params.pp_max_steer_angle_);
 }
 
 // ================== Stanley Controller Implementation ===================
+Stanley::Stanley() {}
 
-Stanley::Stanley(const std::shared_ptr<ControlParams>& params) : params_(params) {}
-
-double Stanley::calculateSteeringAngle(const VehicleState& current_state, const std::vector<TrajectoryPoint>& path) const
+double Stanley::calculateSteeringAngle(const VehicleState& current_state,
+                                       const std::vector<TrajectoryPoint>& path,
+                                       const ControlParams::ControllerModeParams& params,
+                                       const double& vehicle_length) const
 {
     if (path.empty()) return 0.0;
 
-    // Get the point of front axle
-    double min_dist = std::numeric_limits<double>::max();
-    int closest_idx = 0;
-    Eigen::Vector2d front_axle_pos = path[0].position + 
-        Eigen::Vector2d(params_->vehicle_length_ * cos(path[0].yaw) * 0.5, 
-                        params_->vehicle_length_ * sin(path[0].yaw) * 0.5); // local trajectory is defined at the center of the vehicle
+    // 1. Get the point of front axle(vehicle frame)
+    const Eigen::Vector2d front_axle_pos(vehicle_length * 0.5, 0.0); // local trajectory is defined at the center of the vehicle
     
-    // Find the closest point on the path to the front axle
-    for (int i = 0; i < path.size(); ++i) {
-        double dist = (path[i].position - front_axle_pos).norm();
-        if (dist < min_dist) {
-            min_dist = dist;
-            closest_idx = i;
+    // 2. Find the closest point on the path to the front axle
+    double min_dist = std::numeric_limits<double>::max();
+    int closest_segment_idx = 0;
+    Eigen::Vector2d closest_proj_point;
+    
+    for (size_t i = 0; i + 1 < path.size(); ++i) {
+        const Eigen::Vector2d& p1 = path[i].position;
+        const Eigen::Vector2d& p2 = path[i+1].position;
+        const Eigen::Vector2d segment = p2 - p1;
+
+        if (segment.squaredNorm() < 1e-8) continue; // skip if too short
+
+        double t = (front_axle_pos - p1).dot(segment) / segment.squaredNorm();
+        t = std::max(0.0, std::min(1.0, t)); // t (0.0 ~ 1.0)
+
+        Eigen::Vector2d projection = p1 + t * segment;
+        double dist_sq = (front_axle_pos - projection).squaredNorm();
+
+        if (dist_sq < min_dist) {
+            min_dist = dist_sq;
+            closest_segment_idx = i;
+            closest_proj_point = projection;
         }
     }
 
-    // Get the target point
-    const TrajectoryPoint& target_point = path[closest_idx];
-    double path_yaw = target_point.yaw;
+    // 3. Calculate the cross track error(with sign)
+    double path_yaw = path[closest_segment_idx].yaw;
+    Eigen::Vector2d error_vec = front_axle_pos - closest_proj_point;
 
-    // Calculate the cross track error
-    Eigen::Vector2d error_vec = front_axle_pos - target_point.position;
-    double cross_track_error = error_vec.norm();
-    
-    // Calculate the heading error
-    double path_dx = cos(path_yaw + M_PI_2);
-    double path_dy = sin(path_yaw + M_PI_2);
-    if (error_vec.dot(Eigen::Vector2d(path_dx, path_dy)) < 0) {
-        cross_track_error *= -1.0;
-    }
+    // Determine left or right direction error
+    double cross_track_error = error_vec.y() * std::cos(path_yaw) - error_vec.x() * std::sin(path_yaw);
 
+    // 4. Calculate the heading error
     double heading_error = path_yaw;
-    while (heading_error > M_PI) heading_error -= 2 * M_PI;
-    while (heading_error < -M_PI) heading_error += 2 * M_PI;
 
-    // Calculate the cross track steering, 0.1 is added to the speed to avoid division by zero
-    double cross_track_steering = atan2(params_->stanley_k_gain_ * cross_track_error, current_state.speed + 0.1);
+    // 5. Calculate dynamic k gain based on curvature
+    const TrajectoryPoint& target_point = path[closest_segment_idx];
+    double target_curvature = std::abs(target_point.curvature);
 
-    // Calculate the steering angle
+    // k_gain_curvature_boost_ has value only if RACING MODE
+    double curvature_boost_factor = 1.0 + params.k_gain_curvature_boost_ * target_curvature;
+    double dynamic_k = params.k_gain_ * curvature_boost_factor;
+
+    // 6. Calculate the cross track steering, 0.1 is added to the speed to avoid division by zero
+    double cross_track_steering = atan2(dynamic_k * -cross_track_error, current_state.speed + 0.1);
+
+    // 7. Calculate the steering angle
     double steering_angle = heading_error + cross_track_steering;
 
+    // 8. Low-Pass Filter
+    const double alpha = params.stanley_alpha_; // stability(0.0) <---> response(1.0)
+    double filtered_steering_angle = alpha * steering_angle + (1.0 - alpha) * last_filtered_steering_angle_;
+    last_filtered_steering_angle_ = filtered_steering_angle;
+
     // Clamp the steering angle: -max_steer_angle_ <= steering_angle <= max_steer_angle_
-    return std::clamp(steering_angle, -params_->pp_max_steer_angle_, params_->pp_max_steer_angle_);
+    return std::clamp(filtered_steering_angle, -params.pp_max_steer_angle_, params.pp_max_steer_angle_);
 }
 
 // ==================== PID Controller Implementation ====================
 
-PIDController::PIDController(const std::shared_ptr<ControlParams>& params)
-    : params_(params),
-      kp_(params_->pid_kp_), ki_(params_->pid_ki_), kd_(params_->pid_kd_), 
-      min_output_(0.0), max_output_(params_->max_throttle_),
-      integral_error_(0.0), previous_error_(0.0), first_run_(true) {}
+// formula_autonomous_system.cpp
 
-double PIDController::calculate(double setpoint, double measured_value) {
+// ==================== PID Controller Implementation ====================
+
+// 생성자에서 멤버 변수 초기화 부분을 제거하고, 상태 변수만 초기화
+PIDController::PIDController()
+    : integral_error_(0.0), previous_error_(0.0), first_run_(true) {}
+
+// 함수 시그니처 변경 및 게인 값들을 인자로 직접 받아서 사용
+double PIDController::calculate(double setpoint, double measured_value, double kp, double ki, double kd, double max_output) {
     auto current_time = std::chrono::steady_clock::now();
     
     // 첫 실행 시 dt가 비정상적으로 커지는 것을 방지
@@ -1817,26 +2001,21 @@ double PIDController::calculate(double setpoint, double measured_value) {
     std::chrono::duration<double> delta_time = current_time - last_time_;
     double dt = delta_time.count();
     
-    // dt가 0이거나 너무 작은 경우, 계산 오류를 방지
     if (dt <= 1e-6) {
-        // 이전 제어값을 그대로 사용하거나 0을 반환할 수 있습니다.
-        // 여기서는 P, I, D 중 P항만 계산하여 반환합니다.
-        return std::clamp(kp_ * (setpoint - measured_value), min_output_, max_output_);
+        return std::clamp(kp * (setpoint - measured_value), 0.0, max_output);
     }
 
     // 1. 비례(Proportional) 항 계산
     double error = setpoint - measured_value;
-    double p_term = kp_ * error;
+    double p_term = kp * error;
 
     // 2. 적분(Integral) 항 계산
     integral_error_ += error * dt;
-    // Integral Wind-up 방지를 위해 적분항도 제한할 수 있습니다. (선택적)
-    // integral_error_ = std::clamp(integral_error_, min_integral, max_integral);
-    double i_term = ki_ * integral_error_;
+    double i_term = ki * integral_error_;
 
     // 3. 미분(Derivative) 항 계산
     double derivative_error = (error - previous_error_) / dt;
-    double d_term = kd_ * derivative_error;
+    double d_term = kd * derivative_error;
 
     // 최종 제어 출력값 계산
     double output = p_term + i_term + d_term;
@@ -1846,7 +2025,7 @@ double PIDController::calculate(double setpoint, double measured_value) {
     last_time_ = current_time;
 
     // 출력값을 지정된 범위 내로 제한(clamping)
-    return std::clamp(output, min_output_, max_output_);
+    return std::clamp(output, 0.0, max_output);
 }
 
 void PIDController::reset() {
@@ -1873,7 +2052,8 @@ FormulaAutonomousSystem::FormulaAutonomousSystem():
     just_crossed_line_(false),
     current_mode_(DrivingMode::MAPPING),
     is_global_path_generated_(false),
-    current_lap_(1) {
+    current_lap_(0),
+    vehicle_position_relative_to_line_(0.0) {
 }
 
 FormulaAutonomousSystem::~FormulaAutonomousSystem(){
@@ -1923,13 +2103,15 @@ bool FormulaAutonomousSystem::init(ros::NodeHandle& pnh){
 
     // Control
     if (control_params_->lateral_controller_type_ == "Stanley") { 
-        lateral_controller_ = std::make_unique<Stanley>(control_params_);
+        lateral_controller_ = std::make_unique<Stanley>();
         ROS_INFO("Lateral Controller: Stanley selected");
+
     } else { // Default to Pure Pursuit
-        lateral_controller_ = std::make_unique<PurePursuit>(control_params_);
+        lateral_controller_ = std::make_unique<PurePursuit>();
         ROS_INFO("Lateral Controller: PurePursuit selected");
     }
-    longitudinal_controller_ = std::make_unique<PIDController>(control_params_);
+
+    longitudinal_controller_ = std::make_unique<PIDController>();
 
     is_initialized_ = true;
     return true;
@@ -2059,41 +2241,67 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     // Update global cone map
     std::vector<Cone> cones_for_planning = map_manager_->updateAndGetPlannedCones(vehicle_state, cones_);
     map_manager_->generateLanesFromMemory();
-    trajectory_points_ = trajectory_generator_->generateTrajectory(cones_for_planning, planning_state_);
 
     // Behavior planning
-    // setRacingStrategy(vehicle_state, cones_for_planning);
+    setRacingStrategy(vehicle_state, cones_for_planning);
+
+    // Select parameters based on the current driving mode
+    const auto& current_planning_params = (current_mode_ == DrivingMode::RACING) 
+                                          ? planning_params_->trajectory_generation.racing_mode 
+                                          : planning_params_->trajectory_generation.mapping_mode;
+
+    // Generate trajectory based on the current driving mode
+    if (current_mode_ == DrivingMode::RACING && is_global_path_generated_) {
+        // In RACING mode, follow the pre-calculated global path
+        trajectory_points_ = trajectory_generator_->getTrajectoryFromGlobalPath(vehicle_state, global_path_, current_planning_params);
+
+    } else {
+        // In MAPPING mode, generate a simple and stable path for mapping
+        trajectory_points_ = trajectory_generator_->generatePathFromClosestCones(cones_for_planning, current_planning_params);
+    }
 
     // =================================================================
     // STEP 5: CONTROL - "How do I get there?"
     // =================================================================
     
-    // 1. 횡방향 제어: 경로와 현재 상태를 기반으로 조향각 계산
-    double steering_angle = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_);
+    // 1. 현재 주행 모드에 맞는 제어 파라미터 선택
+    const auto& current_control_params = (current_mode_ == DrivingMode::RACING)
+                                         ? control_params_->racing_mode
+                                         : control_params_->mapping_mode;
 
-    // 2. 종방향 제어: 목표 속도와 현재 속도를 기반으로 스로틀 계산
-    // 2-1. (기본 속도) 곡률 기반으로 계산된 경로의 목표 속도를 가져옴
-    double base_target_speed = trajectory_points_[0].speed;
+    // 2. 횡방향 제어: 경로와 현재 상태, 그리고 현재 모드 파라미터를 기반으로 조향각 계산
+    double steering_angle = lateral_controller_->calculateSteeringAngle(vehicle_state,
+                                                                        trajectory_points_,
+                                                                        current_control_params,
+                                                                        control_params_->vehicle_length_);
 
-    // 2-2. (실시간 보정) 계산된 스티어링 각도에 비례하여 목표 속도를 추가로 감속
-    double steering_dampening = std::abs(steering_angle) * control_params_->steering_based_speed_gain_;
+    // 3. 종방향 제어: 목표 속도와 현재 속도를 기반으로 스로틀 계산
+    double base_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].speed;
+
+    // 3-1. (실시간 보정) 계산된 스티어링 각도에 비례하여 목표 속도를 추가로 감속
+    double steering_dampening = std::abs(steering_angle) * current_control_params.steering_based_speed_gain_;
     double final_target_speed = base_target_speed - steering_dampening;
 
-    // 2-3. 최종 목표 속도가 planning_params_의 최소 속도보다 낮아지지 않도록 제한
-    final_target_speed = std::max(planning_params_->min_speed_, final_target_speed);
+    // 3-2. 최종 목표 속도가 planning_params_의 최소 속도보다 낮아지지 않도록 제한
+    final_target_speed = std::max(current_planning_params.min_speed_, final_target_speed);
 
-    // 2-4. 최종 목표 속도를 바탕으로 PID 제어기를 통해 스로틀 계산
-    double throttle = longitudinal_controller_->calculate(final_target_speed, vehicle_state.speed);
+    // 3-3. 최종 목표 속도를 바탕으로 PID 제어기를 통해 스로틀 계산
+    double throttle = longitudinal_controller_->calculate(final_target_speed,
+                                                          vehicle_state.speed,
+                                                          current_control_params.pid_kp_,
+                                                          current_control_params.pid_ki_,
+                                                          current_control_params.pid_kd_,
+                                                          current_control_params.max_throttle_);
 
-    // 3. 계산된 제어 명령을 멤버 변수에 저장
+    // 4. 계산된 제어 명령을 멤버 변수에 저장
     control_command_msg.steering = -steering_angle; // FSDS 좌표계에 맞게 음수(-) 적용
     if (throttle > 0.0){
         control_command_msg.throttle = throttle;
         control_command_msg.brake = 0.0;
-    }
-    else{
+
+    } else{
         control_command_msg.throttle = 0.0;
-        control_command_msg.brake = -throttle;
+        control_command_msg.brake = -throttle; // 급정지를 막기 위해 브레이크는 0으로 유지 (필요 시 수정)
     }
 
     // Debug
@@ -2167,38 +2375,115 @@ std::vector<Cone> FormulaAutonomousSystem::getGlobalConeMap() const {
     return {}; // Return empty vector if map_manager_ is not initialized
 }
 
-/*void FormulaAutonomousSystem::setRacingStrategy(const VehicleState& vehicle_state, const std::vector<Cone>& cones_for_planning) {
-    // 1. Lap Counting & Mode Switching Logic
+/**
+ * @brief Manages the overall racing strategy, including lap counting and mode switching.
+ */
+
+void FormulaAutonomousSystem::setRacingStrategy(const VehicleState& vehicle_state, const std::vector<Cone>& cones_for_planning) {
+    // 1. Define the start/finish line if it hasn't been defined yet.
     if (!is_start_finish_line_defined_) {
         defineStartFinishLine(cones_for_planning);
     }
-    if (is_start_finish_line_defined_) {
-        updateLapCount(vehicle_state); // current_lap_ is updated inside
-    }
-    // 2. Trajectory Planning based on Driving Mode
-    if (current_mode_ == DrivingMode::MAPPING) {
-        // In mapping mode, we do not generate a global path
-        trajectory_points_ = trajectory_generator_->generateTrajectory(cones_for_planning, planning_state_);
 
-        // Switch to RACING mode after completing the first lap
-        if (current_lap_ > 1 && !is_global_path_generated_) {
-            ROS_INFO("Lap 1 finished. Generating Global Path and switching to RACING mode...");
-            generateGlobalPath();
+    // 2. Update the lap count if the line has been defined.
+    if (is_start_finish_line_defined_) {
+        updateLapCount(vehicle_state);
+    }
+    
+    // 3. Switch driving mode and generate global path after lap 1.
+    if (current_lap_ > 1 && current_mode_ == DrivingMode::MAPPING && !is_global_path_generated_) {
+
+        ROS_INFO("FormulaAutonomousSystem: Lap 1 finished. Generating Global Path...");
+        generateGlobalPath(); // Call the path generation function
+
+        if (!global_path_.empty()) {
+
             is_global_path_generated_ = true;
             current_mode_ = DrivingMode::RACING;
-            ROS_INFO("Switched to RACING mode!");
-        }
+            ROS_INFO("FormulaAutonomousSystem: Global Path generated with %zu points. Switched to RACING mode!", global_path_.size());
 
-    } else {
-        // In racing mode, follow the global path
-        if (!global_path_.empty()) {
-            // TODO: (다음 단계에서 구현) 전역 경로에서 현재 주행에 필요한 부분을 추출
-            // trajectory_points_ = trajectory_generator_->getTrajectoryFromGlobalPath(vehicle_state, global_path_);
-            trajectory_points_ = trajectory_generator_->generateTrajectory(cones_for_planning, planning_state_); // 임시
         } else {
-            ROS_WARN("RACING mode is active, but global path is not ready. Using local planner as fallback.");
-            trajectory_points_ = trajectory_generator_->generateTrajectory(cones_for_planning, planning_state_);
+            ROS_ERROR("FormulaAutonomousSystem: Global Path generation failed. Staying in MAPPING mode.");
         }
     }
 }
-*/
+
+/**
+ * @brief Defines the start/finish line using four orange cones.
+ */
+void FormulaAutonomousSystem::defineStartFinishLine(const std::vector<Cone>& cones) {
+
+    std::vector<Eigen::Vector2d> orange_cones;
+
+    for (const auto& cone : cones) {
+        if (cone.color == "orange" && cone.center.x > 0 && cone.center.x < 15.0) { // 전방 15m 이내 주황 콘
+            orange_cones.emplace_back(cone.center.x, cone.center.y);
+        }
+    }
+
+    if (orange_cones.size() < 4) {
+        return; // Not enough orange cones detected yet.
+    }
+
+    // Sort cones by y-coordinate to separate left and right pairs
+    std::sort(orange_cones.begin(), orange_cones.end(), [](const Eigen::Vector2d& a, const Eigen::Vector2d& b) {
+        return a.y() > b.y(); // y가 큰 쪽이 왼쪽
+    });
+
+    // The two cones with the largest y are left, the two with the smallest y are right.
+    Eigen::Vector2d left_midpoint = (orange_cones[0] + orange_cones[1]) / 2.0;
+    Eigen::Vector2d right_midpoint = (orange_cones[orange_cones.size()-1] + orange_cones[orange_cones.size()-2]) / 2.0;
+
+    // The center of the start line is the midpoint of the two midpoints.
+    start_finish_line_center_ = (left_midpoint + right_midpoint) / 2.0;
+
+    // The direction vector of the line goes from right to left.
+    start_finish_line_direction_ = (left_midpoint - right_midpoint).normalized();
+
+    // The yaw of the line is perpendicular to its direction.
+    start_finish_line_yaw_ = std::atan2(start_finish_line_direction_.y(), start_finish_line_direction_.x()) - M_PI / 2.0;
+    is_start_finish_line_defined_ = true;
+    just_crossed_line_ = true; // IMPORTANT: Prevent counting the first pass right after starting.
+    current_lap_ = 1;
+    ROS_INFO("FormulaAutonomousSystem: Start/Finish line defined at (%.2f, %.2f) with direction (%.2f, %.2f)",
+             start_finish_line_center_.x(), start_finish_line_center_.y(),
+             start_finish_line_direction_.x(), start_finish_line_direction_.y());
+}
+
+/**
+ * @brief Updates the lap count when the vehicle crosses the start/finish line.
+ */
+void FormulaAutonomousSystem::updateLapCount(const VehicleState& current_state) {
+
+    Eigen::Vector2d car_position_vec(current_state.position.x(), current_state.position.y());
+
+    // Vector from the line center to the car
+    Eigen::Vector2d vec_to_car = car_position_vec - start_finish_line_center_;
+    // Normal vector to the line (points in the direction of travel)
+    Eigen::Vector2d line_normal(-start_finish_line_direction_.y(), start_finish_line_direction_.x());
+
+    // Project the vector to the car onto the normal vector to find out which side of the line we are on.
+    double previous_position_relative = vehicle_position_relative_to_line_;
+    vehicle_position_relative_to_line_ = vec_to_car.dot(line_normal);
+
+    // Check for sign change (crossing the line)
+    // We crossed if the product of the previous and current relative positions is negative.
+    if (previous_position_relative > 0 && vehicle_position_relative_to_line_ <= 0) {
+
+        if (!just_crossed_line_) {
+            current_lap_++;
+            just_crossed_line_ = true; // Set flag to prevent double counting
+            ROS_INFO("================================================");
+            ROS_INFO("FormulaAutonomousSystem: Crossed line! New Lap: %d", current_lap_);
+            ROS_INFO("================================================");
+        }
+    }
+
+    // Reset the 'just_crossed_line_' flag only when the car is far away from the line on the "after" side.
+    // This prevents re-triggering if the car wiggles across the line.
+    double dist_from_line_center = (car_position_vec - start_finish_line_center_).norm();
+
+    if (just_crossed_line_ && dist_from_line_center > 10.0) { // 10m 이상 멀어지면 리셋
+        just_crossed_line_ = false;
+    }
+}
