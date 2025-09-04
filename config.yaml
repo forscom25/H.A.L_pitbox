@@ -131,7 +131,7 @@ mapping:
 
   # Cone sorting parameters for lane generation
   max_connection_distance: 15.0
-  direction_weight: 0.5 # Path direction consistency weight (0.0 ~1.0)
+  direction_weight: 0.5 # Path direction consistency weight (0.0 ~ 1.0)
 
   # Cone map refinement parameters
   max_dist_from_lane: 2.0
@@ -140,33 +140,32 @@ mapping:
 # Planning Parameters
 # ===========================================
 planning:
-  trajectory:
-    # Basic trajectory generation
-    lookahead_distance: 20.0
-    waypoint_spacing: 2.0
-    default_speed: 3.0 # StopTrajectory
-    
-    # Cone-based path planning (meters)
-    max_cone_distance: 25.0
-    lane_offset: 2.0
-    
-    # Safety parameters (meters)
-    safety_margin: 0.5
+  trajectory_generation:
+    # Parameters used during the MAPPING lap
+    mapping_mode:
+      lookahead_distance: 3.0
+      waypoint_spacing: 0.2
+      max_speed: 3.0
+      lane_offset: 2.0
 
-    # Curvature-based speed planning
-    max_speed: 5.0
-    min_speed: 1.0
-    curvature_gain: 5.0
+    # Parameters used during the RACING laps
+    racing_mode:
+      lookahead_distance: 15.0
+      waypoint_spacing: 0.5
+      max_speed: 7.0
+      min_speed: 3.0
+      curvature_gain: 3.5
 
-  behavior:
+      # 👇 [추가] S자 코스 제어 로직
+      s_curve_logic:
+        enable: true
+        detection_yaw_rate_threshold: 0.1 # 이 값보다 yaw 변화율이 크면 S자 코스로 감지 (튜닝 필요)
+        max_speed: 3.0 # S자 코스 최대 속도
+        min_speed: 2.0 # S자 코스 최소 속도
+
+  behavioral_logic:
     # Lap Counting & Race Logic
-    # total laps based on KSAE FSD rules
-    # total_laps includes the mapping lap (e.g. 10 laps = 1 mapping lap + 9 racing laps)
-    total_laps: 10 # [laps]
-
-    # Dynamic Start/Finish Line Detection (meters)
-    min_y_separation: 5.0  # track width
-    max_x_separation: 2.0  # cone offset
+    total_laps: 10
 
 # ===========================================
 # Control Parameters
@@ -174,29 +173,43 @@ planning:
 control:
   ControllerSelection:
     # lateral_controller_type: "PurePursuit", "Stanley"
-    lateral_controller_type: "Stanley" 
+    lateral_controller_type: "Stanley"
 
-  PurePursuit:
-    lookahead_distance: 5.0
-    max_steer_angle: 1.0
+  # Parameters used during the MAPPING lap
+  mapping_mode:
+    PurePursuit:
+      lookahead_distance: 5.0
+      max_steer_angle: 1.0
 
-  Stanley:
-    k_gain: 0.5
-    k_gain_curvature_boost: 1.2
-    steering_lpf_alpha: 0.5  # <-- [추가] 값이 작을수록 부드러워집니다 (0.0 ~ 1.0)
-  # PID Speed Control Parameters
-  SpeedControl:
-    pid_kp: 0.7
-    pid_ki: 0.3
-    pid_kd: 0.3
-    max_throttle: 0.6
+    Stanley:
+      k_gain: 1.0
+      alpha: 1.0
 
-    # Steering-based speed dampening gain
-    #steering_based_speed_gain: 5.0 # Higher value means more aggressive slowing on turns.
-    # tanh함수 민갑도
-    steering_sensitivity: 0.3  
-    # [추가] 속도 제어용 스티어링 필터 계수. 값이 작을수록 부드러움. 추천: 0.9 ~ 0.98
-    speed_control_steering_lpf_alpha: 0.95 
+    SpeedControl:
+      pid_kp: 0.3
+      pid_ki: 0.0
+      pid_kd: 0.01
+      max_throttle: 0.4
+      steering_based_speed_gain: 0.0
+
+  # Parameters used during the RACING laps
+  racing_mode:
+    PurePursuit:
+      lookahead_distance: 8.0
+      max_steer_angle: 1.0
+
+    Stanley:
+      k_gain: 2.5
+      k_gain_curvature_boost: 1.6
+      alpha: 1.0
+
+    SpeedControl:
+      pid_kp: 0.4
+      pid_ki: 0.0
+      pid_kd: 0.02
+      max_throttle: 0.4
+      # steering_sensitivity: 10.0
+      # speed_control_steering_lpf_alpha: 0.95
 
   Vehicle:
     wheel_base: 1.55
