@@ -33,6 +33,8 @@ perception:
 
   # Cone geometric constraints
   lidar_cone_detection:
+    cone_min_height: 0.1
+    cone_max_height: 0.5
     cone_min_radius: 0.00
     cone_max_radius: 0.7
     cone_min_points: 1
@@ -76,15 +78,13 @@ perception:
 
   # Image preprocessing settings
   camera_image_processing:
-    enable_preprocessing: true
-    enable_fog_correction: true # <<< 안개보정기능 켜는 스위치
-    clahe_clip_limit: 2.0 # <<< 대비 증폭을 제한 2~4가 적정
-    clahe_tile_grid_size: 8 # <<< 대비를 계산할 지역 격자의 크기. 8x8이 표준
+    enable_preprocessing: false
+    enable_defogging: true  
     gaussian_blur_sigma: 1.0
     bilateral_filter_diameter: 9
 
   camera_hsv_window_size:
-    window_size: 20
+    window_size: 15
 
   # HSV thresholds for yellow cone detection
   camera_hsv_yellow:
@@ -131,8 +131,8 @@ mapping:
   cone_memory_association_threshold: 1.0
 
   # Cone sorting parameters for lane generation
-  max_connection_distance: 10.0
-  direction_weight: 0.5 # Path direction consistency weight (0.0 ~1.0)
+  max_connection_distance: 15.0
+  direction_weight: 0.5 # Path direction consistency weight (0.0 ~ 1.0)
 
   # Cone map refinement parameters
   max_dist_from_lane: 2.0
@@ -141,33 +141,25 @@ mapping:
 # Planning Parameters
 # ===========================================
 planning:
-  trajectory:
-    # Basic trajectory generation
-    lookahead_distance: 20.0
-    waypoint_spacing: 0.5
-    default_speed: 3.0
-    
-    # Cone-based path planning (meters)
-    max_cone_distance: 25.0
-    lane_offset: 2.0
-    
-    # Safety parameters (meters)
-    safety_margin: 0.5
+  trajectory_generation:
+    # Parameters used during the MAPPING lap
+    mapping_mode:
+      lookahead_distance: 3.0
+      waypoint_spacing: 0.2
+      max_speed: 3.0
+      lane_offset: 2.0
 
-    # Curvature-based speed planning
-    max_speed: 3.0
-    min_speed: 1.0
-    curvature_gain: 5.0
+    # Parameters used during the RACING laps
+    racing_mode:
+      lookahead_distance: 15.0
+      waypoint_spacing: 0.5
+      max_speed: 7.0
+      min_speed: 3.0
+      curvature_gain: 3.5
 
-  behavior:
+  behavioral_logic:
     # Lap Counting & Race Logic
-    # total laps based on KSAE FSD rules
-    # total_laps includes the mapping lap (e.g. 10 laps = 1 mapping lap + 9 racing laps)
-    total_laps: 10 # [laps]
-
-    # Dynamic Start/Finish Line Detection (meters)
-    min_y_separation: 5.0  # track width
-    max_x_separation: 2.0  # cone offset
+    total_laps: 10
 
 # ===========================================
 # Control Parameters
@@ -175,24 +167,42 @@ planning:
 control:
   ControllerSelection:
     # lateral_controller_type: "PurePursuit", "Stanley"
-    lateral_controller_type: "Stanley" 
+    lateral_controller_type: "Stanley"
 
-  PurePursuit:
-    lookahead_distance: 5.0
-    max_steer_angle: 1.0
+  # Parameters used during the MAPPING lap
+  mapping_mode:
+    PurePursuit:
+      lookahead_distance: 5.0
+      max_steer_angle: 1.0
 
-  Stanley:
-    k_gain: 0.7
+    Stanley:
+      k_gain: 1.0
+      alpha: 1.0
 
-  # PID Speed Control Parameters
-  SpeedControl:
-    pid_kp: 0.5
-    pid_ki: 0.01
-    pid_kd: 0.02
-    max_throttle: 0.6
+    SpeedControl:
+      pid_kp: 0.3
+      pid_ki: 0.0
+      pid_kd: 0.01
+      max_throttle: 0.4
+      steering_based_speed_gain: 0.0
 
-    # Gain for steering-based speed dampening. Higher value means more aggressive slowing on turns.
-    steering_based_speed_gain: 0.2
+  # Parameters used during the RACING laps
+  racing_mode:
+    PurePursuit:
+      lookahead_distance: 8.0
+      max_steer_angle: 1.0
+
+    Stanley:
+      k_gain: 1.8
+      k_gain_curvature_boost: 1.5
+      alpha: 1.0
+
+    SpeedControl:
+      pid_kp: 0.4
+      pid_ki: 0.0
+      pid_kd: 0.02
+      max_throttle: 0.4
+      steering_based_speed_gain: 1.2
 
   Vehicle:
     wheel_base: 1.55
