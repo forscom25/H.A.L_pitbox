@@ -1121,9 +1121,7 @@ struct PerceptionParams
     
     // Image Processing
     bool camera_enable_preprocessing_;
-    bool camera_enable_fog_correction_; // <<< 추가
-    double camera_clahe_clip_limit_;    // <<< 추가
-    int camera_clahe_tile_grid_size_;   // <<< 추가
+    bool camera_enable_defogging_; // <--- 안개 보정 활성화 플래그 추가
     double camera_gaussian_blur_sigma_; // noise reduction sigma for Gaussian blur
     int camera_bilateral_filter_d_; // smart blur filter(maintain edges)
     
@@ -1173,9 +1171,6 @@ struct PerceptionParams
         printf("  Camera 2 (Right) Translation: [%.3f, %.3f, %.3f]\n", camera2_translation_[0], camera2_translation_[1], camera2_translation_[2]);
         printf("  Camera 2 (Right) Rotation: [%.3f, %.3f, %.3f] deg\n", camera2_rotation_[0], camera2_rotation_[1], camera2_rotation_[2]);
         printf("  Preprocessing enabled: %s\n", camera_enable_preprocessing_ ? "true" : "false");
-         printf("  Fog Correction enabled: %s\n", camera_enable_fog_correction_ ? "true" : "false"); // <<< 추가
-        printf("  CLAHE Clip Limit: %.1f\n", camera_clahe_clip_limit_);                             // <<< 추가
-        printf("  CLAHE Tile Grid Size: %d\n", camera_clahe_tile_grid_size_);                       // <<< 추가
         printf("  Gaussian blur sigma: %.3f\n", camera_gaussian_blur_sigma_);
         printf("  Bilateral filter diameter: %d\n", camera_bilateral_filter_d_);
         printf("  HSV window size: %d\n", camera_hsv_window_size_);
@@ -1207,6 +1202,8 @@ struct PerceptionParams
         if(!pnh.getParam("/perception/lidar_clustering/dbscan_min_points", lidar_dbscan_min_points_)){std::cerr<<"Param perception/lidar_clustering/dbscan_min_points has error" << std::endl; return false;}
 
         // LiDAR Cone Detection
+        if(!pnh.getParam("/perception/lidar_cone_detection/cone_min_height", lidar_cone_detection_min_height_)){std::cerr<<"Param perception/lidar_cone_detection/cone_min_height has error" << std::endl; return false;}
+        if(!pnh.getParam("/perception/lidar_cone_detection/cone_max_height", lidar_cone_detection_max_height_)){std::cerr<<"Param perception/lidar_cone_detection/cone_max_height has error" << std::endl; return false;}
         if(!pnh.getParam("/perception/lidar_cone_detection/cone_min_radius", lidar_cone_detection_min_radius_)){std::cerr<<"Param perception/lidar_cone_detection/cone_min_radius has error" << std::endl; return false;}
         if(!pnh.getParam("/perception/lidar_cone_detection/cone_max_radius", lidar_cone_detection_max_radius_)){std::cerr<<"Param perception/lidar_cone_detection/cone_max_radius has error" << std::endl; return false;}
         if(!pnh.getParam("/perception/lidar_cone_detection/cone_min_points", lidar_cone_detection_min_points_)){std::cerr<<"Param perception/lidar_cone_detection/cone_min_points has error" << std::endl; return false;}
@@ -1253,9 +1250,7 @@ struct PerceptionParams
 
         // Camera Image Processing
         if(!pnh.getParam("/perception/camera_image_processing/enable_preprocessing", camera_enable_preprocessing_)){std::cerr<<"Param perception/camera_image_processing/enable_preprocessing has error" << std::endl; return false;}
-        if(!pnh.getParam("/perception/camera_image_processing/enable_fog_correction", camera_enable_fog_correction_)){std::cerr<<"Param perception/camera_image_processing/enable_fog_correction has error" << std::endl; return false;} // <<< 추가
-        if(!pnh.getParam("/perception/camera_image_processing/clahe_clip_limit", camera_clahe_clip_limit_)){std::cerr<<"Param perception/camera_image_processing/clahe_clip_limit has error" << std::endl; return false;} // <<< 추가
-        if(!pnh.getParam("/perception/camera_image_processing/clahe_tile_grid_size", camera_clahe_tile_grid_size_)){std::cerr<<"Param perception/camera_image_processing/clahe_tile_grid_size has error" << std::endl; return false;} // <<< 추가
+        if(!pnh.getParam("/perception/camera_image_processing/enable_defogging", camera_enable_defogging_)){std::cerr<<"Param perception/camera_image_processing/enable_defogging has error" << std::endl; return false;} // <--- 파라미터 로딩 추가
         if(!pnh.getParam("/perception/camera_image_processing/gaussian_blur_sigma", camera_gaussian_blur_sigma_)){std::cerr<<"Param perception/camera_image_processing/gaussian_blur_sigma has error" << std::endl; return false;}
         if(!pnh.getParam("/perception/camera_image_processing/bilateral_filter_diameter", camera_bilateral_filter_d_)){std::cerr<<"Param perception/camera_image_processing/bilateral_filter_diameter has error" << std::endl; return false;}
 
@@ -1332,7 +1327,7 @@ struct MappingParams {
     double cone_memory_association_threshold_;      // Minimum association confidence to consider a match
     double max_connection_distance_;                // Maximum distance to connect cones (m)
     double direction_weight_;                       // Weight for direction consistency in cone sorting
-    double max_dist_from_lane_; // Maximum distance from lane to consider a cone valid (m)
+    double max_dist_from_lane_;                     // Maximum distance from lane to consider a cone valid (m)
     
     // Print parameters for debugging
     void print() const {
@@ -1362,52 +1357,71 @@ struct MappingParams {
 // ==================== Planning ====================
 
 struct PlanningParams {
-    // =================== Basic Trajectory Generation ===================
-    double lookahead_distance_;     // Lookahead distance (m)
-    double waypoint_spacing_;       // Distance between waypoints (m)
-    double default_speed_;          // Default speed for trajectory generation (m/s)
-    
-    // =================== Cone-based Path Planning ===================
-    double max_cone_distance_;      // Maximum cone distance to consider (m)
-    double lane_offset_;            // Offset from single cone (m)
-    
-    // =================== Safety Parameters ===================
-    double safety_margin_;          // Safety margin from cones (m)
 
-    // =================== Curvature-based Speed Planning Parameters ===================
-    double max_speed_;              // maximum speed (m/s)
-    double min_speed_;              // minimum speed (m/s)
-    double curvature_gain_;         // curvature gain for speed adjustment
+    // Structure to hold parameters for a specific trajectory generation mode
+    struct TrajectoryModeParams {
+        double lookahead_distance_;         // Lookahead distance (m)
+        double waypoint_spacing_;           // Distance between waypoints (m)
+        double max_speed_;                  // Max speed (m/s)
+        double min_speed_;                  // Minimum speed (m/s)
+        double curvature_gain_;             // curvature gain for speed adjustment
+        double lane_offset_;                // Offset from single cone (m)
+    };
+
+    struct TrajectoryGeneration {
+        TrajectoryModeParams mapping_mode;
+        TrajectoryModeParams racing_mode;
+    };
+
+    struct BehavioralLogic {
+        int total_laps_;
+    };
+    
+    // Main parameter holders
+    TrajectoryGeneration trajectory_generation;
+    BehavioralLogic behavioral_logic;
 
     // Print current parameters
     void print() const {
-        printf("=== Trajectory Parameters ===\n");
-        printf("Lookahead distance: %.3f m\n", lookahead_distance_);
-        printf("Waypoint spacing: %.3f m\n", waypoint_spacing_);
-        printf("Default speed: %.3f m/s\n", default_speed_);
-        printf("Max cone distance: %.3f m\n", max_cone_distance_);
-        printf("Lane offset: %.3f m\n", lane_offset_);
-        printf("Safety margin: %.3f m\n", safety_margin_);
-        printf("Max speed: %.3f m/s\n", max_speed_);
-        printf("Min speed: %.3f m/s\n", min_speed_);
-        printf("Curvature gain: %.3f\n", curvature_gain_);
-    }
-    
-    // Load parameters from ROS NodeHandle
-    bool getParameters(ros::NodeHandle& pnh) {
-        std::cout << "FormulaAutonomousSystem: Local planning parameters file updated" << std::endl;
+        printf("=== Planning Parameters ===\n");
         
-        // =================== Trajectory Parameters ===================
-        if(!pnh.getParam("/planning/trajectory/lookahead_distance", lookahead_distance_)){std::cerr<<"Param planning/trajectory/lookahead_distance has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/waypoint_spacing", waypoint_spacing_)){std::cerr<<"Param planning/trajectory/waypoint_spacing has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/default_speed", default_speed_)){std::cerr<<"Param planning/trajectory/default_speed has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/max_cone_distance", max_cone_distance_)){std::cerr<<"Param planning/trajectory/max_cone_distance has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/lane_offset", lane_offset_)){std::cerr<<"Param planning/trajectory/lane_offset has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/safety_margin", safety_margin_)){std::cerr<<"Param planning/trajectory/safety_margin has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/max_speed", max_speed_)){std::cerr<<"Param planning/trajectory/max_speed has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/min_speed", min_speed_)){std::cerr<<"Param planning/trajectory/min_speed has error" << std::endl; return false;}
-        if(!pnh.getParam("/planning/trajectory/curvature_gain", curvature_gain_)){std::cerr<<"Param planning/trajectory/curvature_gain has error" << std::endl; return false;}
+        printf("\n[Trajectory Generation -> Mapping Mode]\n");
+        printf("  Lookahead Distance: %.3f m\n", trajectory_generation.mapping_mode.lookahead_distance_);
+        printf("  Waypoint Spacing: %.3f m\n", trajectory_generation.mapping_mode.waypoint_spacing_);
+        printf("  Max Speed: %.3f m/s\n", trajectory_generation.mapping_mode.max_speed_);
+        printf("  Lane Offset: %.3f m\n", trajectory_generation.mapping_mode.lane_offset_);
 
+        printf("\n[Trajectory Generation -> Racing Mode]\n");
+        printf("  Lookahead Distance: %.3f m\n", trajectory_generation.racing_mode.lookahead_distance_);
+        printf("  Waypoint Spacing: %.3f m\n", trajectory_generation.racing_mode.waypoint_spacing_);
+        printf("  Max Speed: %.3f m/s\n", trajectory_generation.racing_mode.max_speed_);
+        printf("  Min Speed: %.3f m/s\n", trajectory_generation.racing_mode.min_speed_);
+        printf("  Curvature Gain: %.3f\n", trajectory_generation.racing_mode.curvature_gain_);
+
+        printf("\n[Behavioral Logic]\n");
+        printf("  Total Laps: %d\n", behavioral_logic.total_laps_);
+    }
+
+    // Load all planning parameters from ROS NodeHandle
+    bool getParameters(ros::NodeHandle& pnh) {
+        std::cout << "FormulaAutonomousSystem: Loading Planning parameters..." << std::endl;
+        
+        // Load Trajectory Generation -> Mapping Mode 
+        if(!pnh.getParam("/planning/trajectory_generation/mapping_mode/lookahead_distance", trajectory_generation.mapping_mode.lookahead_distance_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/mapping_mode/waypoint_spacing", trajectory_generation.mapping_mode.waypoint_spacing_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/waypoint_spacing" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/mapping_mode/max_speed", trajectory_generation.mapping_mode.max_speed_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/max_speed" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/mapping_mode/lane_offset", trajectory_generation.mapping_mode.lane_offset_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lane_offset" << std::endl; return false; }
+
+        // Load Trajectory Generation -> Racing Mode parameters
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/lookahead_distance", trajectory_generation.racing_mode.lookahead_distance_)){std::cerr<<"Param /planning/trajectory_generation/racing_mode/lookahead_distance" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/waypoint_spacing", trajectory_generation.racing_mode.waypoint_spacing_)){std::cerr<<"Param /planning/trajectory_generation/racing_mode/lookahead_distance" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/max_speed", trajectory_generation.racing_mode.max_speed_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/min_speed", trajectory_generation.racing_mode.min_speed_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/curvature_gain", trajectory_generation.racing_mode.curvature_gain_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
+        
+        // Load Behavioral Logic parameters
+        if(!pnh.getParam("/planning/behavioral_logic/total_laps", behavioral_logic.total_laps_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
+        
         return true;
     }
 };
@@ -1415,49 +1429,78 @@ struct PlanningParams {
 // ==================== Control ====================
 
 struct ControlParams {
-    // ===================  Controller Selection =================== 
+    // Structure to hold parameters for a specific controller mode
+    struct ControllerModeParams {
+        // Lateral Control: Pure Pursuit
+        double pp_lookahead_distance_;
+        double pp_max_steer_angle_;
+
+        // Lateral Control: Stanley
+        double k_gain_;
+        double k_gain_curvature_boost_; // Note: This is only used in racing_mode
+        double stanley_alpha_;
+
+        // Longitudinal Control: PID Controller
+        double pid_kp_;
+        double pid_ki_;
+        double pid_kd_;
+        double max_throttle_;
+        double steering_based_speed_gain_;
+    };
+
+    // ===================  Controller Selection ===================
     std::string lateral_controller_type_;
-    
-    // =================== Lateral Control: Pure Pursuit ===================
-    double pp_lookahead_distance_;    // lookahead distance (m)
-    double pp_max_steer_angle_;       // maximum steering angle (radians)
 
-    // ===================  Stanley Controller Parameters =================== 
-    double stanley_k_gain_; // Stanley controller gain k
-
-    // =================== Longitudinal Control: PID Controller ===================
-    double pid_kp_;                    // proportional gain
-    double pid_ki_;                    // integral gain
-    double pid_kd_;                    // differential gain
-    double max_throttle_;              // maximum throttle (0.0 to 1.0)
-    double steering_based_speed_gain_; // Gain for steering-based speed dampening
+    // Mode-specific parameter sets
+    ControllerModeParams mapping_mode;
+    ControllerModeParams racing_mode;
 
     // =================== Vehicle Specification ===================
-    double vehicle_length_;           // 차량 축거 (Wheelbase) (m)
+    double vehicle_length_;
 
     bool getParameters(ros::NodeHandle& pnh) {
         std::cout << "FormulaAutonomousSystem: Control parameters file updated" << std::endl;
         
-        // ===================  Controller Selection =================== 
+        // ===================  Controller Selection ===================
         if(!pnh.getParam("/control/ControllerSelection/lateral_controller_type", lateral_controller_type_)){std::cerr<<"Param control/ControllerSelection/lateral_controller_type has error" << std::endl; return false;}
-        
-        // =================== Lateral Control: Pure Pursuit ===================
-        if(!pnh.getParam("/control/PurePursuit/lookahead_distance", pp_lookahead_distance_)){std::cerr<<"Param control/PurePursuit/lookahead_distance has error" << std::endl; return false;}
-        if(!pnh.getParam("/control/PurePursuit/max_steer_angle", pp_max_steer_angle_)){std::cerr<<"Param control/PurePursuit/max_steer_angle has error" << std::endl; return false;}
 
-        // ===================  Stanley Controller Parameters =================== 
-        if(!pnh.getParam("/control/Stanley/k_gain", stanley_k_gain_)){std::cerr<<"Param control/Stanley/k_gain has error" << std::endl; return false;}
-        
-        // =================== Longitudinal Control: PID Controller ===================
-        if(!pnh.getParam("/control/SpeedControl/pid_kp", pid_kp_)){std::cerr<<"Param control/SpeedControl/pid_kp has error" << std::endl; return false;}
-        if(!pnh.getParam("/control/SpeedControl/pid_ki", pid_ki_)){std::cerr<<"Param control/SpeedControl/pid_ki has error" << std::endl; return false;}
-        if(!pnh.getParam("/control/SpeedControl/pid_kd", pid_kd_)){std::cerr<<"Param control/SpeedControl/pid_kd has error" << std::endl; return false;}
-        if(!pnh.getParam("/control/SpeedControl/max_throttle", max_throttle_)){std::cerr<<"Param control/SpeedControl/max_throttle has error" << std::endl; return false;}
-        if(!pnh.getParam("/control/SpeedControl/steering_based_speed_gain", steering_based_speed_gain_)){std::cerr<<"Param control/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
+        // ===================  Mapping Mode Parameters ===================
+        // Pure Pursuit
+        if(!pnh.getParam("/control/mapping_mode/PurePursuit/lookahead_distance", mapping_mode.pp_lookahead_distance_)){std::cerr<<"Param control/mapping_mode/PurePursuit/lookahead_distance has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/mapping_mode/PurePursuit/max_steer_angle", mapping_mode.pp_max_steer_angle_)){std::cerr<<"Param control/mapping_mode/PurePursuit/max_steer_angle has error" << std::endl; return false;}
 
+        // Stanley
+        if(!pnh.getParam("/control/mapping_mode/Stanley/k_gain", mapping_mode.k_gain_)){std::cerr<<"Param control/mapping_mode/Stanley/k_gain has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/mapping_mode/Stanley/alpha", mapping_mode.stanley_alpha_)){std::cerr<<"Param control/mapping_mode/Stanley/alpha has error" << std::endl; return false;}
+        mapping_mode.k_gain_curvature_boost_ = 0.0; // Noit used in mapping mode, reset to 0.0
 
+        // SpeedControl
+        if(!pnh.getParam("/control/mapping_mode/SpeedControl/pid_kp", mapping_mode.pid_kp_)){std::cerr<<"Param control/mapping_mode/SpeedControl/pid_kp has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/mapping_mode/SpeedControl/pid_ki", mapping_mode.pid_ki_)){std::cerr<<"Param control/mapping_mode/SpeedControl/pid_ki has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/mapping_mode/SpeedControl/pid_kd", mapping_mode.pid_kd_)){std::cerr<<"Param control/mapping_mode/SpeedControl/pid_kd has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/mapping_mode/SpeedControl/max_throttle", mapping_mode.max_throttle_)){std::cerr<<"Param control/mapping_mode/SpeedControl/max_throttle has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/mapping_mode/SpeedControl/steering_based_speed_gain", mapping_mode.steering_based_speed_gain_)){std::cerr<<"Param control/mapping_mode/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
+
+        // ===================  Racing Mode Parameters ===================
+        // Pure Pursuit
+        if(!pnh.getParam("/control/racing_mode/PurePursuit/lookahead_distance", racing_mode.pp_lookahead_distance_)){std::cerr<<"Param control/racing_mode/PurePursuit/lookahead_distance has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/PurePursuit/max_steer_angle", racing_mode.pp_max_steer_angle_)){std::cerr<<"Param control/racing_mode/PurePursuit/max_steer_angle has error" << std::endl; return false;}
+
+        // Stanley
+        if(!pnh.getParam("/control/racing_mode/Stanley/k_gain", racing_mode.k_gain_)){std::cerr<<"Param control/racing_mode/Stanley/k_gain has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/Stanley/k_gain_curvature_boost", racing_mode.k_gain_curvature_boost_)){std::cerr<<"Param control/racing_mode/Stanley/k_gain_curvature_boost has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/Stanley/alpha", racing_mode.stanley_alpha_)){std::cerr<<"Param control/racing_mode/Stanley/alpha has error" << std::endl; return false;}
+
+        // SpeedControl
+        if(!pnh.getParam("/control/racing_mode/SpeedControl/pid_kp", racing_mode.pid_kp_)){std::cerr<<"Param control/racing_mode/SpeedControl/pid_kp has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/SpeedControl/pid_ki", racing_mode.pid_ki_)){std::cerr<<"Param control/racing_mode/SpeedControl/pid_ki has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/SpeedControl/pid_kd", racing_mode.pid_kd_)){std::cerr<<"Param control/racing_mode/SpeedControl/pid_kd has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/SpeedControl/max_throttle", racing_mode.max_throttle_)){std::cerr<<"Param control/racing_mode/SpeedControl/max_throttle has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/SpeedControl/steering_based_speed_gain", racing_mode.steering_based_speed_gain_)){std::cerr<<"Param control/racing_mode/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
+
+        // =================== Vehicle Specification ===================
         if(!pnh.getParam("/control/Vehicle/wheel_base", vehicle_length_)){std::cerr<<"Param control/Vehicle/wheel_base has error" << std::endl; return false;}
-        
+
         return true;
     }
 };
@@ -1598,6 +1641,7 @@ private:
     
     // Image preprocessing
     cv::Mat preprocessImage(const cv::Mat& rgb_image);
+    cv::Mat defogImage(const cv::Mat& image); // <--- 안개 제거 함수 선언 추가
     
     // Helper functions
     bool isInHSVRange(const cv::Vec3b& hsv_pixel, int hue_min, int hue_max, int sat_min, int val_min);
@@ -1757,14 +1801,17 @@ public:
     explicit TrajectoryGenerator(const std::shared_ptr<PlanningParams>& params);
     ~TrajectoryGenerator() = default;
     
-    // Generate trajectory from cones and current planning state
-    std::vector<TrajectoryPoint> generateTrajectory(const std::vector<Cone>& cones, ASState planning_state);
+    // Generate trajectory from cones and current planning state(for Mapping mode)
+    std::vector<TrajectoryPoint> generatePathFromClosestCones(const std::vector<Cone>& cones, const PlanningParams::TrajectoryModeParams& params);
+    // Generate local trajectory by following the global path (for RACING mode)
+    std::vector<TrajectoryPoint> getTrajectoryFromGlobalPath(const VehicleState& vehicle_state, const std::vector<TrajectoryPoint>& global_path, const PlanningParams::TrajectoryModeParams& params);
 
     /**
      * @brief Get last generated trajectory
      * @return Last trajectory
      */
     const std::vector<TrajectoryPoint>& getLastTrajectory() const { return last_trajectory_; }
+    const std::vector<Eigen::Vector2d>& getLastLocalPathPoints() const { return last_local_path_points_; }
 
     /**
      * @brief Update trajectory parameters
@@ -1779,8 +1826,6 @@ public:
      */
     void printTrajectoryStats() const;
 
-    
-
 private:
     // Utility functions
     double calculateCurvature(const tk::spline& s, double x);
@@ -1791,6 +1836,7 @@ private:
     // Member variables
     std::shared_ptr<PlanningParams> params_;
     std::vector<TrajectoryPoint> last_trajectory_;
+    std::vector<Eigen::Vector2d> last_local_path_points_;
     
     // Statistics
     int generated_trajectories_;
@@ -1804,34 +1850,44 @@ class LateralController
 {
 public:
     virtual ~LateralController() = default;
-    virtual double calculateSteeringAngle(const VehicleState& current_state, const std::vector<TrajectoryPoint>& path) const = 0;
+    virtual double calculateSteeringAngle(const VehicleState& current_state,
+                                          const std::vector<TrajectoryPoint>& path,
+                                          const ControlParams::ControllerModeParams& params,
+                                          const double& vehicle_length) const = 0;
 };
+
 // Pure Pursuit Controller
 class PurePursuit : public LateralController
 {
 public:
-    explicit PurePursuit(const std::shared_ptr<ControlParams>& params);
+    explicit PurePursuit(); // No longer gets parameters
     
-    double calculateSteeringAngle(const VehicleState& current_state, const std::vector<TrajectoryPoint>& path) const override;
+    double calculateSteeringAngle(const VehicleState& current_state,
+                                  const std::vector<TrajectoryPoint>& path,
+                                  const ControlParams::ControllerModeParams& params,
+                                  const double& vehicle_length) const override;
 
 private:
     // 내부 헬퍼 함수들은 그대로 유지
-    int findTargetPointIndex(const std::vector<TrajectoryPoint>& path) const;
-    double calculateSteeringAngleInternal(const Eigen::Vector2d& target_point) const;
-
-    std::shared_ptr<ControlParams> params_; 
+    int findTargetPointIndex(const std::vector<TrajectoryPoint>& path, const ControlParams::ControllerModeParams& params) const;
+    double calculateSteeringAngleInternal(const Eigen::Vector2d& target_point,
+                                        const ControlParams::ControllerModeParams& params,
+                                        const double& vehicle_length) const;
 };
 
 // Stanley Controller
 class Stanley : public LateralController
 {
 public:
-    explicit Stanley(const std::shared_ptr<ControlParams>& params);
+    explicit Stanley(); // No longer gets parameters
 
-    double calculateSteeringAngle(const VehicleState& current_state, const std::vector<TrajectoryPoint>& path) const override;
+    double calculateSteeringAngle(const VehicleState& current_state,
+                                  const std::vector<TrajectoryPoint>& path,
+                                  const ControlParams::ControllerModeParams& params,
+                                  const double& vehicle_length) const override;
 
 private:
-    std::shared_ptr<ControlParams> params_;
+    mutable double last_filtered_steering_angle_ = 0.0;
 };
 
 /**
@@ -1841,23 +1897,19 @@ private:
 class PIDController
 {
 public:
-    /**
-     * @brief PID 제어기 생성자
-     * @param kp 비례(Proportional) 게인
-     * @param ki 적분(Integral) 게인
-     * @param kd 미분(Derivative) 게인
-     * @param min_output 출력값의 최솟값
-     * @param max_output 출력값의 최댓값
-     */
-    PIDController(const std::shared_ptr<ControlParams>& params);
+    PIDController(); // No longer gets parameters
 
     /**
      * @brief 제어값을 계산합니다.
      * @param setpoint 목표값 (Desired value)
      * @param measured_value 현재 측정값 (Actual value)
+     * @param kp 비례(Proportional) 게인
+     * @param ki 적분(Integral) 게인
+     * @param kd 미분(Derivative) 게인
+     * @param max_output 최대 출력값
      * @return double 계산된 제어 출력값
      */
-    double calculate(double setpoint, double measured_value);
+    double calculate(double setpoint, double measured_value, double kp, double ki, double kd, double max_output);
 
     /**
      * @brief 제어기의 내부 상태(적분항, 이전 오차)를 초기화합니다.
@@ -1865,17 +1917,6 @@ public:
     void reset();
 
 private:
-    std::shared_ptr<ControlParams> params_;
-
-    // PID 게인
-    double kp_;
-    double ki_;
-    double kd_;
-
-    // 출력 제한
-    double min_output_;
-    double max_output_;
-
     // 제어기 내부 상태 변수
     double integral_error_;
     double previous_error_;
@@ -1908,6 +1949,14 @@ public:
         }
         return {};
     }
+    Eigen::Vector2d getStartFinishLineCenter() const { return start_finish_line_center_; }
+    Eigen::Vector2d getStartFinishLineDirection() const { return start_finish_line_direction_; }
+    bool isStartFinishLineDefined() const { return is_start_finish_line_defined_; }
+
+    // Globalpath
+    std::vector<TrajectoryPoint> getGlobalPath() const { return global_path_; }
+    bool isGlobalPathGenerated() const { return is_global_path_generated_; }
+    const std::unique_ptr<TrajectoryGenerator>& getTrajectoryGenerator() const { return trajectory_generator_; }
 
     private: // Main thread
 
@@ -1958,9 +2007,11 @@ private:
     DrivingMode current_mode_;
     int current_lap_;
     Eigen::Vector2d start_finish_line_center_;
+    Eigen::Vector2d start_finish_line_direction_;
     double start_finish_line_yaw_;
     bool is_start_finish_line_defined_;
     bool just_crossed_line_;
+    double vehicle_position_relative_to_line_;
 
     // Trajectory planning
     std::shared_ptr<PlanningParams> planning_params_;
@@ -1989,6 +2040,5 @@ public:
     // Trajectory for visualization
     std::vector<TrajectoryPoint> trajectory_points_;
 };
-
 
 #endif // FORMULA_AUTONOMOUS_SYSTEM_HPP
