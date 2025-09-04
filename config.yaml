@@ -79,33 +79,32 @@ perception:
   # Image preprocessing settings
   camera_image_processing:
     enable_preprocessing: false
-    enable_defogging: true  
     gaussian_blur_sigma: 1.0
     bilateral_filter_diameter: 9
 
   camera_hsv_window_size:
-    window_size: 15
+    window_size: 20
 
   # HSV thresholds for yellow cone detection
   camera_hsv_yellow:
     hue_min: 18
     hue_max: 40
-    saturation_min: 36
-    value_min: 100
+    saturation_min: 32
+    value_min: 90
 
   # HSV thresholds for blue cone detection
   camera_hsv_blue:
     hue_min: 95
     hue_max: 110
-    saturation_min: 90
-    value_min: 100
+    saturation_min: 95
+    value_min: 95
 
   # HSV thresholds for orange cone detection
   camera_hsv_orange:
     hue_min: 10
     hue_max: 15
-    saturation_min: 100
-    value_min: 100
+    saturation_min: 95
+    value_min: 95
 
 # ===========================================
 # Localization Parameters
