@@ -152,9 +152,17 @@ planning:
     racing_mode:
       lookahead_distance: 15.0
       waypoint_spacing: 0.5
-      max_speed: 10.0
+      max_speed: 7.5
       min_speed: 3.0
-      curvature_gain: 1.5
+      curvature_gain: 3.8
+
+      # 👇 [교체] twistiness_logic 대신 complexity_logic 사용
+      complexity_logic:
+        enable: true
+        window_size: 30      # 몇 개의 포인트를 한 구간으로 볼 것인가 (20 * 0.5m = 10m 구간)
+        sign_change_threshold: 4 # 구간 내 부호가 2번 이상 바뀌면 복잡 구간으로 판단
+        speed: 4.5           # 감속 시 목표 속도
+
 
   behavioral_logic:
     # Lap Counting & Race Logic
@@ -168,24 +176,41 @@ control:
     # lateral_controller_type: "PurePursuit", "Stanley"
     lateral_controller_type: "Stanley"
 
-  PurePursuit:
-    lookahead_distance: 5.0
-    max_steer_angle: 1.0
+  # Parameters used during the MAPPING lap
+  mapping_mode:
+    PurePursuit:
+      lookahead_distance: 5.0
+      max_steer_angle: 1.0
 
-  Stanley:
-    k_gain: 0.9
-    k_gain_curvature_boost: 1.2
-    alpha: 1.0 # (stability(0.0) <---> response(1.0))
+    Stanley:
+      k_gain: 1.0
+      alpha: 1.0
 
-  # PID Speed Control Parameters
-  SpeedControl:
-    pid_kp: 0.3
-    pid_ki: 0.0
-    pid_kd: 0.01
-    max_throttle: 0.4
+    SpeedControl:
+      pid_kp: 0.3
+      pid_ki: 0.0
+      pid_kd: 0.01
+      max_throttle: 0.4
+      steering_based_speed_gain: 0.0
 
-    # Steering-based speed dampening gain
-    steering_based_speed_gain: 0.0 # Higher value means more aggressive slowing on turns.
+  # Parameters used during the RACING laps
+  racing_mode:
+    PurePursuit:
+      lookahead_distance: 8.0
+      max_steer_angle: 1.0
+
+    Stanley:
+      k_gain: 2.5
+      k_gain_curvature_boost: 1.6
+      alpha: 1.0
+
+    SpeedControl:
+      pid_kp: 0.4
+      pid_ki: 0.0
+      pid_kd: 0.0
+      max_throttle: 0.4
+      # steering_sensitivity: 10.0
+      # speed_control_steering_lpf_alpha: 0.95
 
   Vehicle:
     wheel_base: 1.55
