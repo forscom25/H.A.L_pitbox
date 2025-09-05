@@ -152,15 +152,15 @@ planning:
     racing_mode:
       lookahead_distance: 15.0
       waypoint_spacing: 0.5
-      max_speed: 7.0
+      max_speed: 7.5
       min_speed: 3.0
-      curvature_gain: 3.5
+      curvature_gain: 3.8
 
       # 👇 [추가] S자 코스 제어 로직
       s_curve_logic:
         enable: true
-        detection_yaw_rate_threshold: 0.1 # 이 값보다 yaw 변화율이 크면 S자 코스로 감지 (튜닝 필요)
-        max_speed: 3.0 # S자 코스 최대 속도
+        detection_yaw_rate_threshold: 0.087 # 이 값보다 yaw 변화율이 크면 S자 코스로 감지 (튜닝 필요)
+        max_speed: 3.7 # S자 코스 최대 속도
         min_speed: 2.0 # S자 코스 최소 속도
 
   behavioral_logic:
@@ -206,7 +206,7 @@ control:
     SpeedControl:
       pid_kp: 0.4
       pid_ki: 0.0
-      pid_kd: 0.02
+      pid_kd: 0.0
       max_throttle: 0.4
       # steering_sensitivity: 10.0
       # speed_control_steering_lpf_alpha: 0.95
