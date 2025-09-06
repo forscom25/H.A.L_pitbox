@@ -1759,6 +1759,7 @@ void FormulaAutonomousSystem::generateGlobalPath() {
         double ddy = spline_y.deriv(2, s);
         double yaw = std::atan2(dy, dx);
         double curvature = (dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
+        ROS_INFO("Path Point s=%.2f, Curvature: %f", s, curvature);
         temp_path.emplace_back(x, y, yaw, curvature, 0.0, s); // 속도는 나중에 계산
     }
 
@@ -1769,54 +1770,52 @@ void FormulaAutonomousSystem::generateGlobalPath() {
 
 // ========================[ 새로운 2단계 속도 계산 로직 시작 ]========================
 
-    // 1단계: 경로의 각 지점이 '복잡 구간'에 속하는지 미리 표시(Marking)합니다.
-    std::vector<bool> is_complex_point(temp_path.size(), false); // 각 지점의 복잡 여부를 저장할 벡터
+    // ========================[ 최종 '경로 진동' 기반 로직 시작 ]========================
 
+    // 1단계: 각 지점에서 앞으로의 '경로 진동 지수'를 계산합니다.
+    std::vector<double> vibration_indices(temp_path.size(), 0.0);
     if (params.complexity_enable_) {
-        for (size_t i = 0; i < temp_path.size() - params.complexity_window_size_; ++i) {
-            // 현재 지점(i)에서부터 윈도우 사이즈만큼의 구간을 검사합니다.
-            int sign_changes = 0;
-            double last_sign = (temp_path[i].curvature > 0.001) ? 1.0 : ((temp_path[i].curvature < -0.001) ? -1.0 : 0.0);
+        for (size_t i = 0; i < temp_path.size(); ++i) {
+            
+            // 1-1. 앞으로 내다볼 목표 지점(target_idx)을 찾습니다.
+            size_t target_idx = i;
+            double target_s = temp_path[i].s + params.complexity_check_distance_;
+            for (size_t j = i; j < temp_path.size(); ++j) {
+                if (temp_path[j].s >= target_s) {
+                    target_idx = j;
+                    break;
+                }
+                if (j == temp_path.size() - 1) target_idx = j;
+            }
 
-            for (int j = 1; j < params.complexity_window_size_; ++j) {
-                double current_sign = (temp_path[i + j].curvature > 0.001) ? 1.0 : ((temp_path[i + j].curvature < -0.001) ? -1.0 : 0.0);
-                if (current_sign != 0 && current_sign != last_sign) {
-                    sign_changes++;
-                }
-                if (current_sign != 0) {
-                    last_sign = current_sign;
-                }
+            if (target_idx <= i) continue;
+
+            // 1-2. 현재 지점(i)부터 목표 지점(target_idx)까지의 '누적 곡률 변화량'을 계산합니다.
+            //      이것이 바로 '진동'의 척도입니다.
+            double total_curvature_change = 0.0;
+            for (size_t j = i + 1; j <= target_idx; ++j) {
+                total_curvature_change += std::abs(temp_path[j].curvature - temp_path[j-1].curvature);
             }
-            // 복잡 구간으로 판단되어 마킹을 시작하는지 여부를 출력합니다.
-            ROS_INFO("Checking Window Starting at Point[%zu]: Sign Changes = %d, Marking Triggered = %s",
-                     i, sign_changes, (sign_changes >= params.complexity_sign_change_threshold_) ? "TRUE" : "FALSE");
-            // 만약 현재 윈도우가 복잡 구간 기준을 만족한다면,
-            // 그 윈도우에 포함된 '모든' 지점을 '복잡하다'고 표시해버립니다.
-            if (sign_changes >= params.complexity_sign_change_threshold_) {
-                for (int k = 0; k < params.complexity_window_size_; ++k) {
-                    is_complex_point[i + k] = true;
-                }
-            }
+
+            vibration_indices[i] = total_curvature_change;
         }
     }
 
-    // 2단계: 표시된 결과를 바탕으로 최종 속도를 할당합니다.
+    // 2단계: 계산된 '진동 지수'를 바탕으로 최종 속도를 할당합니다.
     for (size_t i = 0; i < temp_path.size(); ++i) {
         // 기본 속도는 곡률 기반으로 계산
         double curvature_speed = params.max_speed_ / (1.0 + params.curvature_gain_ * temp_path[i].curvature);
-        
-        // 만약 현재 지점이 1단계에서 '복잡하다'고 표시되었다면, 감속 속도를 적용합니다.
-        if (is_complex_point[i]) {
+        ROS_INFO("Point[%zu]: Vibration Index = %f, ShouldSlowDown = %s",
+                 i, vibration_indices[i], (vibration_indices[i] > params.complexity_vibration_threshold_) ? "TRUE" : "FALSE");
+        // '진동 지수'가 임계값을 넘으면 복잡 구간으로 판단하여 감속
+        if (vibration_indices[i] > params.complexity_vibration_threshold_) {
             temp_path[i].speed = std::min(curvature_speed, params.complexity_speed_);
         } else {
-            // 복잡하지 않은 구간은 곡률 기반 속도만 사용합니다.
             temp_path[i].speed = curvature_speed;
         }
     }
-    // ========================[ 새로운 2단계 속도 계산 로직 끝 ]==========================
-    // 경로의 시작과 끝 지점 속도 처리
-    temp_path.front().speed = temp_path[1].speed;
-    temp_path.back().speed = temp_path[temp_path.size() - 2].speed;
+
+    // ===================================[ 로직 끝 ]===================================
 
     // 5. Speed Smoothing (Moving Average Filter)
     std::vector<TrajectoryPoint> smoothed_path = temp_path;
