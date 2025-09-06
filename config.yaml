@@ -159,11 +159,10 @@ planning:
       # 👇 [교체] twistiness_logic 대신 complexity_logic 사용
       complexity_logic:
         enable: true
-        window_size: 30      # 몇 개의 포인트를 한 구간으로 볼 것인가 (20 * 0.5m = 10m 구간)
-        sign_change_threshold: 4 # 구간 내 부호가 2번 이상 바뀌면 복잡 구간으로 판단
-        speed: 4.5           # 감속 시 목표 속도
+        speed: 4.0           # 복잡 구간 주행 속도
 
-
+        check_distance: 35.0         # 몇 미터 구간의 진동을 확인할 것인가 (단위: m)
+        vibration_threshold: 0.8     # '경로 진동 지수'가 이 값 이상이면 복잡 구간으로 판단
   behavioral_logic:
     # Lap Counting & Race Logic
     total_laps: 10
