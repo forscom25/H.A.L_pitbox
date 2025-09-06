@@ -76,33 +76,33 @@ perception:
     rotation_pitch: 0.0
     rotation_yaw: 0.0
 
-  # Image preprocessing settings
+ # Image preprocessing settings
   camera_image_processing:
-    enable_preprocessing: false
-    gaussian_blur_sigma: 1.0
+    enable_preprocessing: true
+    gaussian_blur_sigma: 1.2
     bilateral_filter_diameter: 9
 
   camera_hsv_window_size:
-    window_size: 20
+    window_size: 15
 
   # HSV thresholds for yellow cone detection
   camera_hsv_yellow:
     hue_min: 18
     hue_max: 40
-    saturation_min: 32
-    value_min: 90
+    saturation_min: 36
+    value_min: 95
 
   # HSV thresholds for blue cone detection
   camera_hsv_blue:
     hue_min: 95
     hue_max: 110
-    saturation_min: 95
+    saturation_min: 85
     value_min: 95
 
   # HSV thresholds for orange cone detection
   camera_hsv_orange:
     hue_min: 10
-    hue_max: 15
+    hue_max: 17
     saturation_min: 95
     value_min: 95
 
@@ -152,9 +152,18 @@ planning:
     racing_mode:
       lookahead_distance: 15.0
       waypoint_spacing: 0.5
-      max_speed: 7.0
+      max_speed: 9.0
       min_speed: 3.0
-      curvature_gain: 3.5
+      curvature_gain: 3.8
+
+      # 👇 [교체] twistiness_logic 대신 complexity_logic 사용
+      complexity_logic:
+        enable: true
+        low_speed: 5.0          # 복잡 구간 최저 목표 속도
+
+        check_distance: 20.0         # 몇 미터 구간의 진동을 확인할 것인가 (단위: m)
+        vibration_max: 0.55           # 진동 지수가 이 값 이상이면 '복잡도 100%'로 간주
+        smoothing_window: 15         # 복잡도 점수를 부드럽게 만들기 위한 스무딩 창 크기
 
   behavioral_logic:
     # Lap Counting & Race Logic
@@ -192,16 +201,17 @@ control:
       max_steer_angle: 1.0
 
     Stanley:
-      k_gain: 1.8
-      k_gain_curvature_boost: 1.5
+      k_gain: 2.5
+      k_gain_curvature_boost: 1.6
       alpha: 1.0
 
     SpeedControl:
       pid_kp: 0.4
       pid_ki: 0.0
-      pid_kd: 0.02
+      pid_kd: 0.0
       max_throttle: 0.4
-      steering_based_speed_gain: 1.2
+      # steering_sensitivity: 10.0
+      # speed_control_steering_lpf_alpha: 0.95
 
   Vehicle:
     wheel_base: 1.55
