@@ -15,7 +15,7 @@ perception:
   # LiDAR ROI extraction parameters
   lidar_roi_extraction:
     x_min: 0.0
-    x_max: 50.0
+    x_max: 60.0
     y_min: -30.0
     y_max: 30.0
     z_min: -10.0
@@ -28,7 +28,7 @@ perception:
 
   # DBSCAN clustering parameters
   lidar_clustering:
-    dbscan_eps: 0.5
+    dbscan_eps: 0.7
     dbscan_min_points: 2
 
   # Cone geometric constraints
@@ -79,17 +79,17 @@ perception:
  # Image preprocessing settings
   camera_image_processing:
     enable_preprocessing: true
-    gaussian_blur_sigma: 1.2
+    gaussian_blur_sigma: 1.4
     bilateral_filter_diameter: 9
 
   camera_hsv_window_size:
-    window_size: 20
+    window_size: 15
 
   # HSV thresholds for yellow cone detection
   camera_hsv_yellow:
     hue_min: 18
     hue_max: 40
-    saturation_min: 30
+    saturation_min: 35
     value_min: 95
 
   # HSV thresholds for blue cone detection
