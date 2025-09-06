@@ -17,13 +17,13 @@
     bilateral_filter_diameter: 9
 
   camera_hsv_window_size:
-    window_size: 15
+    window_size: 20
 
   # HSV thresholds for yellow cone detection
   camera_hsv_yellow:
     hue_min: 18
     hue_max: 40
-    saturation_min: 36
+    saturation_min: 30
     value_min: 95
 
   # HSV thresholds for blue cone detection
@@ -44,10 +44,10 @@
 
 // Select window left-top corner
     int x = static_cast<int>(center.x) - half_size;
-    int y = static_cast<int>(center.y) - half_size + (window_size / 5);
+    int y = static_cast<int>(center.y) - half_size + (window_size / 4);
 
 // Transform from Vehicle base to camera coordinate system
-    cv::Mat cone_point_in_base = (cv::Mat_<double>(3, 1) << point_3d.x, point_3d.y, point_3d.z-0.1);
+    cv::Mat cone_point_in_base = (cv::Mat_<double>(3, 1) << point_3d.x, point_3d.y, point_3d.z-0.08);
 
 
 std::string ColorDetection::selectBestColor(const ColorConfidence& confidence) {
