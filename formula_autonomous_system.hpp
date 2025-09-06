@@ -1121,7 +1121,6 @@ struct PerceptionParams
     
     // Image Processing
     bool camera_enable_preprocessing_;
-    bool camera_enable_defogging_; // <--- 안개 보정 활성화 플래그 추가
     double camera_gaussian_blur_sigma_; // noise reduction sigma for Gaussian blur
     int camera_bilateral_filter_d_; // smart blur filter(maintain edges)
     
@@ -1250,7 +1249,6 @@ struct PerceptionParams
 
         // Camera Image Processing
         if(!pnh.getParam("/perception/camera_image_processing/enable_preprocessing", camera_enable_preprocessing_)){std::cerr<<"Param perception/camera_image_processing/enable_preprocessing has error" << std::endl; return false;}
-        if(!pnh.getParam("/perception/camera_image_processing/enable_defogging", camera_enable_defogging_)){std::cerr<<"Param perception/camera_image_processing/enable_defogging has error" << std::endl; return false;} // <--- 파라미터 로딩 추가
         if(!pnh.getParam("/perception/camera_image_processing/gaussian_blur_sigma", camera_gaussian_blur_sigma_)){std::cerr<<"Param perception/camera_image_processing/gaussian_blur_sigma has error" << std::endl; return false;}
         if(!pnh.getParam("/perception/camera_image_processing/bilateral_filter_diameter", camera_bilateral_filter_d_)){std::cerr<<"Param perception/camera_image_processing/bilateral_filter_diameter has error" << std::endl; return false;}
 
@@ -1366,6 +1364,12 @@ struct PlanningParams {
         double min_speed_;                  // Minimum speed (m/s)
         double curvature_gain_;             // curvature gain for speed adjustment
         double lane_offset_;                // Offset from single cone (m)
+        //[추가] Complexity Logic Parameters
+        bool complexity_enable_;
+        double complexity_low_speed_;
+        double complexity_check_distance_;
+        double complexity_vibration_max_;
+        int complexity_smoothing_window_;
     };
 
     struct TrajectoryGeneration {
@@ -1418,7 +1422,12 @@ struct PlanningParams {
         if(!pnh.getParam("/planning/trajectory_generation/racing_mode/max_speed", trajectory_generation.racing_mode.max_speed_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
         if(!pnh.getParam("/planning/trajectory_generation/racing_mode/min_speed", trajectory_generation.racing_mode.min_speed_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
         if(!pnh.getParam("/planning/trajectory_generation/racing_mode/curvature_gain", trajectory_generation.racing_mode.curvature_gain_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
-        
+        // Complexity Logic parameters 로딩
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/enable", trajectory_generation.racing_mode.complexity_enable_)){std::cerr<<"Param error" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/low_speed", trajectory_generation.racing_mode.complexity_low_speed_)){std::cerr<<"Param error" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/check_distance", trajectory_generation.racing_mode.complexity_check_distance_)){std::cerr<<"Param error" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/vibration_max", trajectory_generation.racing_mode.complexity_vibration_max_)){std::cerr<<"Param error" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/smoothing_window", trajectory_generation.racing_mode.complexity_smoothing_window_)){std::cerr<<"Param error" << std::endl; return false; }
         // Load Behavioral Logic parameters
         if(!pnh.getParam("/planning/behavioral_logic/total_laps", behavioral_logic.total_laps_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
         
@@ -1446,6 +1455,9 @@ struct ControlParams {
         double pid_kd_;
         double max_throttle_;
         double steering_based_speed_gain_;
+         // For Racing Mode (Non-linear)
+        //double steering_sensitivity_;
+        //double speed_control_steering_lpf_alpha_;
     };
 
     // ===================  Controller Selection ===================
@@ -1496,8 +1508,8 @@ struct ControlParams {
         if(!pnh.getParam("/control/racing_mode/SpeedControl/pid_ki", racing_mode.pid_ki_)){std::cerr<<"Param control/racing_mode/SpeedControl/pid_ki has error" << std::endl; return false;}
         if(!pnh.getParam("/control/racing_mode/SpeedControl/pid_kd", racing_mode.pid_kd_)){std::cerr<<"Param control/racing_mode/SpeedControl/pid_kd has error" << std::endl; return false;}
         if(!pnh.getParam("/control/racing_mode/SpeedControl/max_throttle", racing_mode.max_throttle_)){std::cerr<<"Param control/racing_mode/SpeedControl/max_throttle has error" << std::endl; return false;}
-        if(!pnh.getParam("/control/racing_mode/SpeedControl/steering_based_speed_gain", racing_mode.steering_based_speed_gain_)){std::cerr<<"Param control/racing_mode/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
-
+        //if(!pnh.getParam("/control/racing_mode/SpeedControl/steering_sensitivity", racing_mode.steering_sensitivity_)){std::cerr<<"Param control/racing_mode/SpeedControl/steering_sensitivity has error" << std::endl; return false;}
+        //if(!pnh.getParam("/control/racing_mode/SpeedControl/speed_control_steering_lpf_alpha", racing_mode.speed_control_steering_lpf_alpha_)){std::cerr<<"Param control/racing_mode/SpeedControl/speed_control_steering_lpf_alpha has error" << std::endl; return false;}
         // =================== Vehicle Specification ===================
         if(!pnh.getParam("/control/Vehicle/wheel_base", vehicle_length_)){std::cerr<<"Param control/Vehicle/wheel_base has error" << std::endl; return false;}
 
@@ -1641,7 +1653,6 @@ private:
     
     // Image preprocessing
     cv::Mat preprocessImage(const cv::Mat& rgb_image);
-    cv::Mat defogImage(const cv::Mat& image); // <--- 안개 제거 함수 선언 추가
     
     // Helper functions
     bool isInHSVRange(const cv::Vec3b& hsv_pixel, int hue_min, int hue_max, int sat_min, int val_min);
@@ -2023,6 +2034,8 @@ private:
     std::shared_ptr<ControlParams> control_params_;
     std::unique_ptr<LateralController> lateral_controller_;
     std::unique_ptr<PIDController> longitudinal_controller_;
+
+    //double smoothed_steering_angle_;
 
 public:
     // Odometry & TF broadcasting
