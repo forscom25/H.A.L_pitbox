@@ -547,7 +547,7 @@ std::vector<Cone> ColorDetection::classifyConesColor(const std::vector<Cone>& co
 
 cv::Point2f ColorDetection::projectToCamera(const pcl::PointXYZ& point_3d, int camera_id) {
     // Transform from Vehicle base to camera coordinate system
-    cv::Mat cone_point_in_base = (cv::Mat_<double>(3, 1) << point_3d.x, point_3d.y, point_3d.z);
+    cv::Mat cone_point_in_base = (cv::Mat_<double>(3, 1) << point_3d.x, point_3d.y, point_3d.z-0.05);
     cv::Mat cone_point_in_camera;
     
     if (camera_id == 1) { // Left Camera
@@ -606,18 +606,11 @@ std::string ColorDetection::detectConeColor(const Cone& cone, const cv::Mat& rgb
 }
 
 cv::Mat ColorDetection::preprocessImage(const cv::Mat& rgb_image) {
-    cv::Mat processed = rgb_image.clone();
-
-    // Apply defogging if enabled
-    if (params_->camera_enable_defogging_) {
-        processed = defogImage(processed);
-    }
-
-    // If general preprocessing is disabled, we might still want defogging.
-    // So, we check for the preprocessing flag after the defogging step.
     if (!params_->camera_enable_preprocessing_) {
-        return processed;
+        return rgb_image;
     }
+    
+    cv::Mat processed = rgb_image.clone();
     
     // Apply Gaussian blur for noise reduction
     if (params_->camera_gaussian_blur_sigma_ > 0) {
@@ -639,84 +632,6 @@ cv::Mat ColorDetection::preprocessImage(const cv::Mat& rgb_image) {
     }
     
     return processed;
-}
-
-/**
- * @brief Dark Channel Prior 알고리즘을 사용하여 이미지의 안개를 제거합니다.
- * @param image 안개가 낀 원본 이미지 (BGR)
- * @return cv::Mat 안개가 제거된 이미지
- */
-cv::Mat ColorDetection::defogImage(const cv::Mat& image) {
-    if (image.empty()) {
-        return image;
-    }
-
-    // 파라미터 설정
-    int patch_size = 15; // 다크 채널 계산 시 사용할 패치 크기
-    double omega = 0.95; // 안개 제거 강도 조절 (원본 느낌을 남길 비율)
-    double t0 = 0.1;     // 최소 transmission 값
-
-    cv::Mat img_norm;
-    image.convertTo(img_norm, CV_64FC3, 1.0 / 255.0); // 정규화
-
-    // 1. Dark Channel 계산
-    cv::Mat dark_channel(img_norm.rows, img_norm.cols, CV_64FC1);
-    for (int y = 0; y < img_norm.rows; ++y) {
-        for (int x = 0; x < img_norm.cols; ++x) {
-            cv::Vec3d pixel = img_norm.at<cv::Vec3d>(y, x);
-            dark_channel.at<double>(y, x) = std::min({pixel[0], pixel[1], pixel[2]});
-        }
-    }
-    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(patch_size, patch_size));
-    cv::erode(dark_channel, dark_channel, kernel);
-
-    // 2. 대기광(Atmospheric Light) 추정
-    // 다크 채널에서 가장 밝은 0.1% 픽셀들의 평균값을 대기광으로 추정
-    cv::Mat flat_dark = dark_channel.reshape(1, 1);
-    cv::Mat sorted_indices;
-    cv::sortIdx(flat_dark, sorted_indices, cv::SORT_EVERY_ROW + cv::SORT_DESCENDING);
-    
-    double atmospheric_light[3] = {0.0, 0.0, 0.0};
-    int num_pixels_to_avg = static_cast<int>(flat_dark.cols * 0.001);
-    
-    cv::Vec3d A(0,0,0);
-    for (int i = 0; i < num_pixels_to_avg; ++i) {
-        int idx = sorted_indices.at<int>(0, i);
-        int y = idx / img_norm.cols;
-        int x = idx % img_norm.cols;
-        A += img_norm.at<cv::Vec3d>(y, x);
-    }
-    A /= num_pixels_to_avg;
-
-    // 3. Transmission Map 추정
-    cv::Mat transmission(img_norm.rows, img_norm.cols, CV_64FC1);
-    for (int y = 0; y < img_norm.rows; ++y) {
-        for (int x = 0; x < img_norm.cols; ++x) {
-            cv::Vec3d pixel = img_norm.at<cv::Vec3d>(y, x);
-            double min_val = std::min({pixel[0] / A[0], pixel[1] / A[1], pixel[2] / A[2]});
-            transmission.at<double>(y, x) = 1.0 - omega * min_val;
-        }
-    }
-    cv::erode(transmission, transmission, kernel);
-
-    // 4. 안개 제거된 이미지 복원
-    cv::Mat J(img_norm.rows, img_norm.cols, CV_64FC3);
-    for (int y = 0; y < img_norm.rows; ++y) {
-        for (int x = 0; x < img_norm.cols; ++x) {
-            double t = std::max(transmission.at<double>(y, x), t0);
-            for (int c = 0; c < 3; ++c) {
-                J.at<cv::Vec3d>(y, x)[c] = (img_norm.at<cv::Vec3d>(y, x)[c] - A[c]) / t + A[c];
-            }
-        }
-    }
-    
-    // 픽셀 값이 0~1 범위를 벗어나지 않도록 클리핑 후 8비트 이미지로 변환
-    cv::Mat result;
-    J.convertTo(result, CV_8UC3, 255.0);
-    cv::max(result, 0, result);
-    cv::min(result, 255, result);
-
-    return result;
 }
 
 ColorConfidence ColorDetection::analyzeColorWindow(const cv::Mat& hsv_image, const cv::Point2f& center, int window_size) {
@@ -745,7 +660,7 @@ cv::Rect ColorDetection::getSafeWindow(const cv::Point2f& center, int window_siz
     
     // Select window left-top corner
     int x = static_cast<int>(center.x) - half_size;
-    int y = static_cast<int>(center.y) - half_size;
+    int y = static_cast<int>(center.y) - half_size + (window_size / 5);
     
     // Clamp to image boundaries
     x = std::max(0, std::min(x, image_size.width - window_size));
@@ -836,7 +751,7 @@ bool ColorDetection::isInHSVRange(const cv::Vec3b& hsv_pixel, int hue_min, int h
 }
 
 std::string ColorDetection::selectBestColor(const ColorConfidence& confidence) {
-    double max_confidence = 0.0;
+    double max_confidence = 3.0;
     std::string best_color = "unknown";
     
     if (confidence.yellow_confidence > max_confidence) {
@@ -1831,31 +1746,99 @@ void FormulaAutonomousSystem::generateGlobalPath() {
     tk::spline spline_x, spline_y;
     spline_x.set_points(s_pts, x_pts);
     spline_y.set_points(s_pts, y_pts);
-
-    // 3. Sample points along the spline to calculate curvature and target speed for RACING mode.
+    // 3. [개선된 로직] Sample points and calculate speed with dynamic S-curve detection
     double total_length = s_pts.back();
-    const auto& params = planning_params_->trajectory_generation.racing_mode; // Use RACING parameters
-
-    for (double s = 0; s < total_length; s += 0.5) { // Sample every 0.5m
+    const auto& params = planning_params_->trajectory_generation.racing_mode;
+    std::vector<TrajectoryPoint> temp_path;
+    for (double s = 0; s < total_length; s += 0.5) {
         double x = spline_x(s);
         double y = spline_y(s);
-
-        // Calculate yaw and curvature accurately using 1st and 2nd derivatives
         double dx = spline_x.deriv(1, s);
         double dy = spline_y.deriv(1, s);
         double ddx = spline_x.deriv(2, s);
         double ddy = spline_y.deriv(2, s);
-        
         double yaw = std::atan2(dy, dx);
-        double curvature = std::abs(dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
-
-        // Plan speed based on curvature
-        double speed = params.max_speed_ / (1.0 + params.curvature_gain_ * curvature);
-        speed = std::max(params.min_speed_, std::min(speed, params.max_speed_));
-
-        // Store the complete TrajectoryPoint in the global_path_
-        global_path_.emplace_back(x, y, yaw, curvature, speed, s);
+        double curvature = (dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
+        ROS_INFO("Path Point s=%.2f, Curvature: %f", s, curvature);
+        temp_path.emplace_back(x, y, yaw, curvature, 0.0, s); // 속도는 나중에 계산
     }
+
+    if (temp_path.size() < 5) { // 스무딩을 위해 최소 5개 포인트 필요
+        ROS_WARN("Not enough points in temp_path to generate a reliable global path.");
+        return;
+    }
+
+// ========================[ 새로운 2단계 속도 계산 로직 시작 ]========================
+
+    // ========================[ 최종 '속도 믹싱' 기반 로직 시작 ]========================
+
+    // 1단계: 각 지점의 '원시 복잡도 점수(0~1)'를 계산합니다.
+    std::vector<double> raw_complexity_scores(temp_path.size(), 0.0);
+    if (params.complexity_enable_) {
+        for (size_t i = 0; i < temp_path.size(); ++i) {
+            size_t target_idx = i;
+            double target_s = temp_path[i].s + params.complexity_check_distance_;
+            for (size_t j = i; j < temp_path.size(); ++j) {
+                if (temp_path[j].s >= target_s) { target_idx = j; break; }
+                if (j == temp_path.size() - 1) target_idx = j;
+            }
+            if (target_idx <= i) continue;
+
+            double total_curvature_change = 0.0;
+            for (size_t j = i + 1; j <= target_idx; ++j) {
+                total_curvature_change += std::abs(temp_path[j].curvature - temp_path[j-1].curvature);
+            }
+            // 진동 지수를 0~1 사이의 점수로 정규화합니다.
+            double score = total_curvature_change / params.complexity_vibration_max_;
+            raw_complexity_scores[i] = std::max(0.0, std::min(1.0, score)); // 0~1 사이 값으로 제한
+        }
+    }
+
+    // 2단계: '원시 복잡도 점수'를 스무딩하여 부드러운 점수로 만듭니다.
+    std::vector<double> smoothed_complexity_scores = raw_complexity_scores;
+    if (params.complexity_enable_ && params.complexity_smoothing_window_ > 1) {
+        int half_window = params.complexity_smoothing_window_ / 2;
+        for (size_t i = half_window; i < temp_path.size() - half_window; ++i) {
+            double sum = 0;
+            for (int j = -half_window; j <= half_window; ++j) {
+                sum += raw_complexity_scores[i + j];
+            }
+            smoothed_complexity_scores[i] = sum / params.complexity_smoothing_window_;
+        }
+    }
+
+    // 3단계: 최종 스무딩된 점수를 사용하여 고속과 저속을 '믹싱'합니다.
+    for (size_t i = 0; i < temp_path.size(); ++i) {
+        double high_speed = params.max_speed_ / (1.0 + params.curvature_gain_ * temp_path[i].curvature);
+        double low_speed = params.complexity_low_speed_;
+        
+        // 복잡도 점수(complexity_score)가 0이면 high_speed, 1이면 low_speed가 됩니다.
+        double complexity_score = smoothed_complexity_scores[i];
+        temp_path[i].speed = high_speed * (1.0 - complexity_score) + low_speed * complexity_score;
+        
+        // 최종 속도를 min/max 범위 내로 제한
+        temp_path[i].speed = std::max(params.min_speed_, std::min(temp_path[i].speed, params.max_speed_));
+    }
+    // ===================================[ 로직 끝 ]===================================
+
+
+    // 5. Speed Smoothing (Moving Average Filter)
+    std::vector<TrajectoryPoint> smoothed_path = temp_path;
+    int window_size = 5; // 5개 포인트(앞뒤 2개씩)의 평균을 사용
+    for (size_t i = window_size / 2; i < temp_path.size() - window_size / 2; ++i) {
+        double sum_speed = 0;
+        for (int j = -window_size / 2; j <= window_size / 2; ++j) {
+            sum_speed += temp_path[i + j].speed;
+        }
+        smoothed_path[i].speed = sum_speed / window_size;
+    }
+
+    // 6. 최종 속도를 min/max 범위 내로 제한하며 global_path_에 저장
+    for (const auto& point : smoothed_path) {
+        double final_speed = std::max(params.min_speed_, std::min(point.speed, params.max_speed_));
+        global_path_.emplace_back(point.position.x(), point.position.y(), point.yaw, point.curvature, final_speed, point.s);
+    }
+    
 }
 
 // ================================================================================================
@@ -2260,32 +2243,41 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
         trajectory_points_ = trajectory_generator_->generatePathFromClosestCones(cones_for_planning, current_planning_params);
     }
 
+
     // =================================================================
     // STEP 5: CONTROL - "How do I get there?"
     // =================================================================
     
-    // 1. 현재 주행 모드에 맞는 제어 파라미터 선택
+    double final_target_speed = 0.0;
+
+    // 1. Select parameters based on the current driving mode
     const auto& current_control_params = (current_mode_ == DrivingMode::RACING)
                                          ? control_params_->racing_mode
                                          : control_params_->mapping_mode;
 
-    // 2. 횡방향 제어: 경로와 현재 상태, 그리고 현재 모드 파라미터를 기반으로 조향각 계산
+    // 2. Lateral Control
     double steering_angle = lateral_controller_->calculateSteeringAngle(vehicle_state,
                                                                         trajectory_points_,
                                                                         current_control_params,
                                                                         control_params_->vehicle_length_);
 
-    // 3. 종방향 제어: 목표 속도와 현재 속도를 기반으로 스로틀 계산
-    double base_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].speed;
+    // 3. Longitudinal Control (Speed)
+    if (current_mode_ == DrivingMode::RACING) {
+        // === Curvature-based Speed Control for RACING mode ===
+        // Trajectory 생성 시 이미 곡률에 맞춰 계산된 목표 속도를 그대로 사용합니다.
+        final_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_.front().speed;
+        
+    } else {
+        // === Linear Speed Control for MAPPING mode (Original SuBin logic) ===
+        double base_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].speed;
+        double steering_dampening = std::abs(steering_angle) * current_control_params.steering_based_speed_gain_;
+        final_target_speed = base_target_speed - steering_dampening;
+    }
 
-    // 3-1. (실시간 보정) 계산된 스티어링 각도에 비례하여 목표 속도를 추가로 감속
-    double steering_dampening = std::abs(steering_angle) * current_control_params.steering_based_speed_gain_;
-    double final_target_speed = base_target_speed - steering_dampening;
-
-    // 3-2. 최종 목표 속도가 planning_params_의 최소 속도보다 낮아지지 않도록 제한
+    // 최종 목표 속도가 planning_params_의 최소 속도보다 낮아지지 않도록 제한
     final_target_speed = std::max(current_planning_params.min_speed_, final_target_speed);
 
-    // 3-3. 최종 목표 속도를 바탕으로 PID 제어기를 통해 스로틀 계산
+    // 4. Calculate Throttle using PID Controller
     double throttle = longitudinal_controller_->calculate(final_target_speed,
                                                           vehicle_state.speed,
                                                           current_control_params.pid_kp_,
@@ -2293,15 +2285,14 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
                                                           current_control_params.pid_kd_,
                                                           current_control_params.max_throttle_);
 
-    // 4. 계산된 제어 명령을 멤버 변수에 저장
-    control_command_msg.steering = -steering_angle; // FSDS 좌표계에 맞게 음수(-) 적용
+    // 5. Set final control commands
+    control_command_msg.steering = -steering_angle; // FSDS uses opposite steering convention
     if (throttle > 0.0){
         control_command_msg.throttle = throttle;
         control_command_msg.brake = 0.0;
-
     } else{
         control_command_msg.throttle = 0.0;
-        control_command_msg.brake = -throttle; // 급정지를 막기 위해 브레이크는 0으로 유지 (필요 시 수정)
+        control_command_msg.brake = 0.0; 
     }
 
     // Debug
