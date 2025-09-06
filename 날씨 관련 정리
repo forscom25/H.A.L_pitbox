@@ -1,0 +1,56 @@
+///////////////////////////날씨 관련 정리///////////////////////////
+
+노이즈 잡겠다고 함수 추가하고 많이 지랄하면 오히려 더 에러남. 밝을때도 잘 인식하도록 해야하니깐 기존 코드에서 수정하는식으로 가는게 더 안정적.
+노이즈발생시 색이 밝지 않으므로 인식하는 최소 채도랑 명도 줄이고 전처리기능 킴.  콘의 아랫부분이 더 뚱뚱하므로 색 인식할때 콘의 아랫부분에 더 집중하도록 바꿈. 
+색상으로 판단하기 위한 최소 픽셀 수를 0개에서 3개로 설정하여 우연히 노이즈 픽셀 몇 개가 잡혔을 때 잘못된 색으로 판단하는 경우 방지했음.
+
+이렇게 했을경우 날씨 장난질 좀 했을때 ㄱㅊ, BUt 날씨가 너무 심하면 오류뜸 (예선이므로 이 지랄은 안할듯)
+
+
+
+1. yaml 파일 수정
+
+# Image preprocessing settings
+  camera_image_processing:
+    enable_preprocessing: true
+    gaussian_blur_sigma: 1.2
+    bilateral_filter_diameter: 9
+
+  camera_hsv_window_size:
+    window_size: 15
+
+  # HSV thresholds for yellow cone detection
+  camera_hsv_yellow:
+    hue_min: 18
+    hue_max: 40
+    saturation_min: 36
+    value_min: 95
+
+  # HSV thresholds for blue cone detection
+  camera_hsv_blue:
+    hue_min: 95
+    hue_max: 110
+    saturation_min: 85
+    value_min: 95
+
+  # HSV thresholds for orange cone detection
+  camera_hsv_orange:
+    hue_min: 10
+    hue_max: 17
+    saturation_min: 95
+    value_min: 95
+
+2. system.cpp 파일 수정
+
+// Select window left-top corner
+    int x = static_cast<int>(center.x) - half_size;
+    int y = static_cast<int>(center.y) - half_size + (window_size / 5);
+
+// Transform from Vehicle base to camera coordinate system
+    cv::Mat cone_point_in_base = (cv::Mat_<double>(3, 1) << point_3d.x, point_3d.y, point_3d.z-0.05);
+
+
+std::string ColorDetection::selectBestColor(const ColorConfidence& confidence) {
+    double max_confidence = 3.0;
+    std::string best_color = "unknown";
+
