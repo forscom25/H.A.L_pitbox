@@ -83,13 +83,13 @@ perception:
     bilateral_filter_diameter: 9
 
   camera_hsv_window_size:
-    window_size: 15
+    window_size: 20
 
   # HSV thresholds for yellow cone detection
   camera_hsv_yellow:
     hue_min: 18
     hue_max: 40
-    saturation_min: 36
+    saturation_min: 30
     value_min: 95
 
   # HSV thresholds for blue cone detection
