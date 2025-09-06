@@ -1746,31 +1746,99 @@ void FormulaAutonomousSystem::generateGlobalPath() {
     tk::spline spline_x, spline_y;
     spline_x.set_points(s_pts, x_pts);
     spline_y.set_points(s_pts, y_pts);
-
-    // 3. Sample points along the spline to calculate curvature and target speed for RACING mode.
+    // 3. [개선된 로직] Sample points and calculate speed with dynamic S-curve detection
     double total_length = s_pts.back();
-    const auto& params = planning_params_->trajectory_generation.racing_mode; // Use RACING parameters
-
-    for (double s = 0; s < total_length; s += 0.5) { // Sample every 0.5m
+    const auto& params = planning_params_->trajectory_generation.racing_mode;
+    std::vector<TrajectoryPoint> temp_path;
+    for (double s = 0; s < total_length; s += 0.5) {
         double x = spline_x(s);
         double y = spline_y(s);
-
-        // Calculate yaw and curvature accurately using 1st and 2nd derivatives
         double dx = spline_x.deriv(1, s);
         double dy = spline_y.deriv(1, s);
         double ddx = spline_x.deriv(2, s);
         double ddy = spline_y.deriv(2, s);
-        
         double yaw = std::atan2(dy, dx);
-        double curvature = std::abs(dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
-
-        // Plan speed based on curvature
-        double speed = params.max_speed_ / (1.0 + params.curvature_gain_ * curvature);
-        speed = std::max(params.min_speed_, std::min(speed, params.max_speed_));
-
-        // Store the complete TrajectoryPoint in the global_path_
-        global_path_.emplace_back(x, y, yaw, curvature, speed, s);
+        double curvature = (dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
+        ROS_INFO("Path Point s=%.2f, Curvature: %f", s, curvature);
+        temp_path.emplace_back(x, y, yaw, curvature, 0.0, s); // 속도는 나중에 계산
     }
+
+    if (temp_path.size() < 5) { // 스무딩을 위해 최소 5개 포인트 필요
+        ROS_WARN("Not enough points in temp_path to generate a reliable global path.");
+        return;
+    }
+
+// ========================[ 새로운 2단계 속도 계산 로직 시작 ]========================
+
+    // ========================[ 최종 '속도 믹싱' 기반 로직 시작 ]========================
+
+    // 1단계: 각 지점의 '원시 복잡도 점수(0~1)'를 계산합니다.
+    std::vector<double> raw_complexity_scores(temp_path.size(), 0.0);
+    if (params.complexity_enable_) {
+        for (size_t i = 0; i < temp_path.size(); ++i) {
+            size_t target_idx = i;
+            double target_s = temp_path[i].s + params.complexity_check_distance_;
+            for (size_t j = i; j < temp_path.size(); ++j) {
+                if (temp_path[j].s >= target_s) { target_idx = j; break; }
+                if (j == temp_path.size() - 1) target_idx = j;
+            }
+            if (target_idx <= i) continue;
+
+            double total_curvature_change = 0.0;
+            for (size_t j = i + 1; j <= target_idx; ++j) {
+                total_curvature_change += std::abs(temp_path[j].curvature - temp_path[j-1].curvature);
+            }
+            // 진동 지수를 0~1 사이의 점수로 정규화합니다.
+            double score = total_curvature_change / params.complexity_vibration_max_;
+            raw_complexity_scores[i] = std::max(0.0, std::min(1.0, score)); // 0~1 사이 값으로 제한
+        }
+    }
+
+    // 2단계: '원시 복잡도 점수'를 스무딩하여 부드러운 점수로 만듭니다.
+    std::vector<double> smoothed_complexity_scores = raw_complexity_scores;
+    if (params.complexity_enable_ && params.complexity_smoothing_window_ > 1) {
+        int half_window = params.complexity_smoothing_window_ / 2;
+        for (size_t i = half_window; i < temp_path.size() - half_window; ++i) {
+            double sum = 0;
+            for (int j = -half_window; j <= half_window; ++j) {
+                sum += raw_complexity_scores[i + j];
+            }
+            smoothed_complexity_scores[i] = sum / params.complexity_smoothing_window_;
+        }
+    }
+
+    // 3단계: 최종 스무딩된 점수를 사용하여 고속과 저속을 '믹싱'합니다.
+    for (size_t i = 0; i < temp_path.size(); ++i) {
+        double high_speed = params.max_speed_ / (1.0 + params.curvature_gain_ * temp_path[i].curvature);
+        double low_speed = params.complexity_low_speed_;
+        
+        // 복잡도 점수(complexity_score)가 0이면 high_speed, 1이면 low_speed가 됩니다.
+        double complexity_score = smoothed_complexity_scores[i];
+        temp_path[i].speed = high_speed * (1.0 - complexity_score) + low_speed * complexity_score;
+        
+        // 최종 속도를 min/max 범위 내로 제한
+        temp_path[i].speed = std::max(params.min_speed_, std::min(temp_path[i].speed, params.max_speed_));
+    }
+    // ===================================[ 로직 끝 ]===================================
+
+
+    // 5. Speed Smoothing (Moving Average Filter)
+    std::vector<TrajectoryPoint> smoothed_path = temp_path;
+    int window_size = 5; // 5개 포인트(앞뒤 2개씩)의 평균을 사용
+    for (size_t i = window_size / 2; i < temp_path.size() - window_size / 2; ++i) {
+        double sum_speed = 0;
+        for (int j = -window_size / 2; j <= window_size / 2; ++j) {
+            sum_speed += temp_path[i + j].speed;
+        }
+        smoothed_path[i].speed = sum_speed / window_size;
+    }
+
+    // 6. 최종 속도를 min/max 범위 내로 제한하며 global_path_에 저장
+    for (const auto& point : smoothed_path) {
+        double final_speed = std::max(params.min_speed_, std::min(point.speed, params.max_speed_));
+        global_path_.emplace_back(point.position.x(), point.position.y(), point.yaw, point.curvature, final_speed, point.s);
+    }
+    
 }
 
 // ================================================================================================
@@ -1778,53 +1846,59 @@ void FormulaAutonomousSystem::generateGlobalPath() {
 // ================================================================================================
 
 // ================== PurePursuit Controller Implementation ===================
+PurePursuit::PurePursuit() {}
 
-PurePursuit::PurePursuit(const std::shared_ptr<ControlParams>& params)
-    : params_(params) {
-}
+double PurePursuit::calculateSteeringAngle(const VehicleState& current_state,
+                                          const std::vector<TrajectoryPoint>& path,
+                                          const ControlParams::ControllerModeParams& params,
+                                          const double& vehicle_length) const {
 
-double PurePursuit::calculateSteeringAngle(const VehicleState& current_state, const std::vector<TrajectoryPoint>& path) const {
     if (path.empty()) {
         return 0.0;
     }
 
-    int target_idx = findTargetPointIndex(path);
+    int target_idx = findTargetPointIndex(path, params);
     const Eigen::Vector2d& target_point = path[target_idx].position;
 
-    return calculateSteeringAngleInternal(target_point);
+    return calculateSteeringAngleInternal(target_point, params, vehicle_length);
 }
 
-int PurePursuit::findTargetPointIndex(const std::vector<TrajectoryPoint>& path) const {
+int PurePursuit::findTargetPointIndex(const std::vector<TrajectoryPoint>& path, const ControlParams::ControllerModeParams& params) const {
+
     int target_idx = 0;
-    for (int i = 0; i < path.size(); ++i) {
-        int current_idx = i % path.size();
-        double dist_from_car = path[current_idx].position.norm();
-        
-        if (dist_from_car >= params_->pp_lookahead_distance_) {
-            target_idx = current_idx;
+    for (size_t i = 0; i < path.size(); ++i) {
+        double dist_from_car = path[i].position.norm();
+
+        if (dist_from_car >= params.pp_lookahead_distance_) {
+            target_idx = i;
             break;
         }
     }
     return target_idx;
 }
 
-double PurePursuit::calculateSteeringAngleInternal(const Eigen::Vector2d& target_point) const {
-    double alpha = std::atan2(target_point.y(), target_point.x() + params_->vehicle_length_ * 0.5); // local trajectory is defined at the center of the vehicle
-    double delta = std::atan2(2.0 * params_->vehicle_length_ * std::sin(alpha), params_->pp_lookahead_distance_);
-    
-    return std::clamp(delta, -params_->pp_max_steer_angle_, params_->pp_max_steer_angle_);
+double PurePursuit::calculateSteeringAngleInternal(const Eigen::Vector2d& target_point,
+                                                   const ControlParams::ControllerModeParams& params,
+                                                   const double& vehicle_length) const {
+
+    double alpha = std::atan2(target_point.y(), target_point.x() + vehicle_length * 0.5); // local trajectory is defined at the center of the vehicle
+    double delta = std::atan2(2.0 * vehicle_length * std::sin(alpha), params.pp_lookahead_distance_);
+
+    return std::clamp(delta, -params.pp_max_steer_angle_, params.pp_max_steer_angle_);
 }
 
 // ================== Stanley Controller Implementation ===================
+Stanley::Stanley() {}
 
-Stanley::Stanley(const std::shared_ptr<ControlParams>& params) : params_(params) {}
-
-double Stanley::calculateSteeringAngle(const VehicleState& current_state, const std::vector<TrajectoryPoint>& path) const
+double Stanley::calculateSteeringAngle(const VehicleState& current_state,
+                                       const std::vector<TrajectoryPoint>& path,
+                                       const ControlParams::ControllerModeParams& params,
+                                       const double& vehicle_length) const
 {
     if (path.empty()) return 0.0;
 
     // 1. Get the point of front axle(vehicle frame)
-    const Eigen::Vector2d front_axle_pos(params_->vehicle_length_ * 0.5, 0.0); // local trajectory is defined at the center of the vehicle
+    const Eigen::Vector2d front_axle_pos(vehicle_length * 0.5, 0.0); // local trajectory is defined at the center of the vehicle
     
     // 2. Find the closest point on the path to the front axle
     double min_dist = std::numeric_limits<double>::max();
@@ -1864,8 +1938,10 @@ double Stanley::calculateSteeringAngle(const VehicleState& current_state, const 
     // 5. Calculate dynamic k gain based on curvature
     const TrajectoryPoint& target_point = path[closest_segment_idx];
     double target_curvature = std::abs(target_point.curvature);
-    double curvature_boost_factor = 1.0 + params_->k_gain_curvature_boost_ * target_curvature;
-    double dynamic_k = params_->k_gain_ * curvature_boost_factor;
+
+    // k_gain_curvature_boost_ has value only if RACING MODE
+    double curvature_boost_factor = 1.0 + params.k_gain_curvature_boost_ * target_curvature;
+    double dynamic_k = params.k_gain_ * curvature_boost_factor;
 
     // 6. Calculate the cross track steering, 0.1 is added to the speed to avoid division by zero
     double cross_track_steering = atan2(dynamic_k * -cross_track_error, current_state.speed + 0.1);
@@ -1874,23 +1950,26 @@ double Stanley::calculateSteeringAngle(const VehicleState& current_state, const 
     double steering_angle = heading_error + cross_track_steering;
 
     // 8. Low-Pass Filter
-    const double alpha = params_->stanley_alpha_; // stability(0.0) <---> response(1.0)
+    const double alpha = params.stanley_alpha_; // stability(0.0) <---> response(1.0)
     double filtered_steering_angle = alpha * steering_angle + (1.0 - alpha) * last_filtered_steering_angle_;
     last_filtered_steering_angle_ = filtered_steering_angle;
 
     // Clamp the steering angle: -max_steer_angle_ <= steering_angle <= max_steer_angle_
-    return std::clamp(filtered_steering_angle, -params_->pp_max_steer_angle_, params_->pp_max_steer_angle_);
+    return std::clamp(filtered_steering_angle, -params.pp_max_steer_angle_, params.pp_max_steer_angle_);
 }
 
 // ==================== PID Controller Implementation ====================
 
-PIDController::PIDController(const std::shared_ptr<ControlParams>& params)
-    : params_(params),
-      kp_(params_->pid_kp_), ki_(params_->pid_ki_), kd_(params_->pid_kd_), 
-      min_output_(0.0), max_output_(params_->max_throttle_),
-      integral_error_(0.0), previous_error_(0.0), first_run_(true) {}
+// formula_autonomous_system.cpp
 
-double PIDController::calculate(double setpoint, double measured_value) {
+// ==================== PID Controller Implementation ====================
+
+// 생성자에서 멤버 변수 초기화 부분을 제거하고, 상태 변수만 초기화
+PIDController::PIDController()
+    : integral_error_(0.0), previous_error_(0.0), first_run_(true) {}
+
+// 함수 시그니처 변경 및 게인 값들을 인자로 직접 받아서 사용
+double PIDController::calculate(double setpoint, double measured_value, double kp, double ki, double kd, double max_output) {
     auto current_time = std::chrono::steady_clock::now();
     
     // 첫 실행 시 dt가 비정상적으로 커지는 것을 방지
@@ -1905,26 +1984,21 @@ double PIDController::calculate(double setpoint, double measured_value) {
     std::chrono::duration<double> delta_time = current_time - last_time_;
     double dt = delta_time.count();
     
-    // dt가 0이거나 너무 작은 경우, 계산 오류를 방지
     if (dt <= 1e-6) {
-        // 이전 제어값을 그대로 사용하거나 0을 반환할 수 있습니다.
-        // 여기서는 P, I, D 중 P항만 계산하여 반환합니다.
-        return std::clamp(kp_ * (setpoint - measured_value), min_output_, max_output_);
+        return std::clamp(kp * (setpoint - measured_value), 0.0, max_output);
     }
 
     // 1. 비례(Proportional) 항 계산
     double error = setpoint - measured_value;
-    double p_term = kp_ * error;
+    double p_term = kp * error;
 
     // 2. 적분(Integral) 항 계산
     integral_error_ += error * dt;
-    // Integral Wind-up 방지를 위해 적분항도 제한할 수 있습니다. (선택적)
-    // integral_error_ = std::clamp(integral_error_, min_integral, max_integral);
-    double i_term = ki_ * integral_error_;
+    double i_term = ki * integral_error_;
 
     // 3. 미분(Derivative) 항 계산
     double derivative_error = (error - previous_error_) / dt;
-    double d_term = kd_ * derivative_error;
+    double d_term = kd * derivative_error;
 
     // 최종 제어 출력값 계산
     double output = p_term + i_term + d_term;
@@ -1934,7 +2008,7 @@ double PIDController::calculate(double setpoint, double measured_value) {
     last_time_ = current_time;
 
     // 출력값을 지정된 범위 내로 제한(clamping)
-    return std::clamp(output, min_output_, max_output_);
+    return std::clamp(output, 0.0, max_output);
 }
 
 void PIDController::reset() {
@@ -2012,13 +2086,15 @@ bool FormulaAutonomousSystem::init(ros::NodeHandle& pnh){
 
     // Control
     if (control_params_->lateral_controller_type_ == "Stanley") { 
-        lateral_controller_ = std::make_unique<Stanley>(control_params_);
+        lateral_controller_ = std::make_unique<Stanley>();
         ROS_INFO("Lateral Controller: Stanley selected");
+
     } else { // Default to Pure Pursuit
-        lateral_controller_ = std::make_unique<PurePursuit>(control_params_);
+        lateral_controller_ = std::make_unique<PurePursuit>();
         ROS_INFO("Lateral Controller: PurePursuit selected");
     }
-    longitudinal_controller_ = std::make_unique<PIDController>(control_params_);
+
+    longitudinal_controller_ = std::make_unique<PIDController>();
 
     is_initialized_ = true;
     return true;
@@ -2167,36 +2243,56 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
         trajectory_points_ = trajectory_generator_->generatePathFromClosestCones(cones_for_planning, current_planning_params);
     }
 
+
     // =================================================================
     // STEP 5: CONTROL - "How do I get there?"
     // =================================================================
     
-    // 1. 횡방향 제어: 경로와 현재 상태를 기반으로 조향각 계산
-    double steering_angle = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_);
+    double final_target_speed = 0.0;
 
-    // 2. 종방향 제어: 목표 속도와 현재 속도를 기반으로 스로틀 계산
-    // 2-1. (기본 속도) 곡률 기반으로 계산된 경로의 목표 속도를 가져옴
-    double base_target_speed = trajectory_points_[0].speed;
+    // 1. Select parameters based on the current driving mode
+    const auto& current_control_params = (current_mode_ == DrivingMode::RACING)
+                                         ? control_params_->racing_mode
+                                         : control_params_->mapping_mode;
 
-    // 2-2. (실시간 보정) 계산된 스티어링 각도에 비례하여 목표 속도를 추가로 감속
-    double steering_dampening = std::abs(steering_angle) * control_params_->steering_based_speed_gain_;
-    double final_target_speed = base_target_speed - steering_dampening;
+    // 2. Lateral Control
+    double steering_angle = lateral_controller_->calculateSteeringAngle(vehicle_state,
+                                                                        trajectory_points_,
+                                                                        current_control_params,
+                                                                        control_params_->vehicle_length_);
 
-    // 2-3. 최종 목표 속도가 planning_params_의 최소 속도보다 낮아지지 않도록 제한
+    // 3. Longitudinal Control (Speed)
+    if (current_mode_ == DrivingMode::RACING) {
+        // === Curvature-based Speed Control for RACING mode ===
+        // Trajectory 생성 시 이미 곡률에 맞춰 계산된 목표 속도를 그대로 사용합니다.
+        final_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_.front().speed;
+        
+    } else {
+        // === Linear Speed Control for MAPPING mode (Original SuBin logic) ===
+        double base_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].speed;
+        double steering_dampening = std::abs(steering_angle) * current_control_params.steering_based_speed_gain_;
+        final_target_speed = base_target_speed - steering_dampening;
+    }
+
+    // 최종 목표 속도가 planning_params_의 최소 속도보다 낮아지지 않도록 제한
     final_target_speed = std::max(current_planning_params.min_speed_, final_target_speed);
 
-    // 2-4. 최종 목표 속도를 바탕으로 PID 제어기를 통해 스로틀 계산
-    double throttle = longitudinal_controller_->calculate(final_target_speed, vehicle_state.speed);
+    // 4. Calculate Throttle using PID Controller
+    double throttle = longitudinal_controller_->calculate(final_target_speed,
+                                                          vehicle_state.speed,
+                                                          current_control_params.pid_kp_,
+                                                          current_control_params.pid_ki_,
+                                                          current_control_params.pid_kd_,
+                                                          current_control_params.max_throttle_);
 
-    // 3. 계산된 제어 명령을 멤버 변수에 저장
-    control_command_msg.steering = -steering_angle; // FSDS 좌표계에 맞게 음수(-) 적용
+    // 5. Set final control commands
+    control_command_msg.steering = -steering_angle; // FSDS uses opposite steering convention
     if (throttle > 0.0){
         control_command_msg.throttle = throttle;
         control_command_msg.brake = 0.0;
-    }
-    else{
+    } else{
         control_command_msg.throttle = 0.0;
-        control_command_msg.brake = -throttle;
+        control_command_msg.brake = 0.0; 
     }
 
     // Debug
