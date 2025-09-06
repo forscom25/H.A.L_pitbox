@@ -1356,6 +1356,10 @@ void StateMachine::initializeValidTransitions() {
     
     // AS_DRIVING transitions
     valid_transitions_[{ASState::AS_DRIVING, ASState::AS_OFF}] = true;
+    valid_transitions_[{ASState::AS_DRIVING, ASState::AS_FINISHED}] = true;
+
+    // AS_FINISHED transitions
+    valid_transitions_[{ASState::AS_FINISHED, ASState::AS_OFF}] = true;
 }
 
 bool StateMachine::isValidTransition(ASState from, ASState to) const {
@@ -1380,6 +1384,14 @@ StateTransitionResult StateMachine::processEvent(ASEvent event) {
                 mission_active_ = true;
             }
             break;
+
+        // Finishing event
+        case ASEvent::RACE_FINISHED:
+            if (current_state_ == ASState::AS_DRIVING) {
+                target_state = ASState::AS_FINISHED;
+            }
+            break;
+
         default:
             return StateTransitionResult(false, current_state_, current_state_, 
                                        "Unknown event: " + reason);
@@ -1453,10 +1465,17 @@ bool StateMachine::enterAS_DRIVING() {
     return true;
 }
 
+bool StateMachine::enterAS_FINISHED() {
+    std::cout << "StateMachine: Entering AS_FINISHED state" << std::endl;
+    mission_active_ = false; // Race finished, deactivate mission
+    return true;
+}
+
 // State exit functions
 bool StateMachine::exitAS_OFF() { return true; }
 bool StateMachine::exitAS_READY() { return true; }
 bool StateMachine::exitAS_DRIVING() { return true; }
+bool StateMachine::exitAS_FINISHED() { return true; }
 
 void StateMachine::injectSystemInit() {
     processEvent(ASEvent::SYSTEM_INIT);
@@ -1488,6 +1507,7 @@ std::string StateMachine::stateToString(ASState state) const {
         case ASState::AS_OFF: return "AS_OFF";
         case ASState::AS_READY: return "AS_READY";
         case ASState::AS_DRIVING: return "AS_DRIVING";
+        case ASState::AS_FINISHED: return "AS_FINISHED";
         default: return "UNKNOWN";
     }
 }
@@ -1497,6 +1517,7 @@ std::string StateMachine::eventToString(ASEvent event) const {
         case ASEvent::SYSTEM_INIT: return "SYSTEM_INIT";
         case ASEvent::SYSTEM_READY: return "SYSTEM_READY";
         case ASEvent::GO_SIGNAL: return "GO_SIGNAL";
+        case ASEvent::RACE_FINISHED: return "RACE_FINISHED";
         default: return "UNKNOWN_EVENT";
     }
 }
@@ -1968,6 +1989,7 @@ FormulaAutonomousSystem::FormulaAutonomousSystem():
     current_mode_(DrivingMode::MAPPING),
     is_global_path_generated_(false),
     current_lap_(0),
+    is_race_finished_(false),
     vehicle_position_relative_to_line_(0.0) {
 }
 
@@ -2119,7 +2141,7 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     // STEP 2: CHECK DRIVING CONDITIONS - "Can I drive?"
     // =================================================================
 
-    if (planning_state_ != ASState::AS_DRIVING) {
+    if (planning_state_ != ASState::AS_DRIVING && planning_state_ != ASState::AS_FINISHED) {
         control_command_msg.steering = 0.0;
         control_command_msg.throttle = 0.0;
         control_command_msg.brake = 1.0;
@@ -2160,64 +2182,86 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     // Behavior planning
     setRacingStrategy(vehicle_state, cones_for_planning);
 
-    // Select parameters based on the current driving mode
-    const auto& current_planning_params = (current_mode_ == DrivingMode::RACING) 
-                                          ? planning_params_->trajectory_generation.racing_mode 
-                                          : planning_params_->trajectory_generation.mapping_mode;
+    // Trajectory generation (Only if it's AS_DRIVING state)
+    if (planning_state_ == ASState::AS_DRIVING) {
 
-    // Generate trajectory based on the current driving mode
-    if (current_mode_ == DrivingMode::RACING && is_global_path_generated_) {
-        // In RACING mode, follow the pre-calculated global path
-        trajectory_points_ = trajectory_generator_->getTrajectoryFromGlobalPath(vehicle_state, global_path_, current_planning_params);
+        // Select parameters based on the current driving mode
+        const auto& current_planning_params = (current_mode_ == DrivingMode::RACING) 
+                                            ? planning_params_->trajectory_generation.racing_mode 
+                                            : planning_params_->trajectory_generation.mapping_mode;
 
-    } else {
-        // In MAPPING mode, generate a simple and stable path for mapping
-        trajectory_points_ = trajectory_generator_->generatePathFromClosestCones(cones_for_planning, current_planning_params);
+        // Generate trajectory based on the current driving mode
+        if (current_mode_ == DrivingMode::RACING && is_global_path_generated_) {
+            // In RACING mode, follow the pre-calculated global path
+            trajectory_points_ = trajectory_generator_->getTrajectoryFromGlobalPath(vehicle_state, global_path_, current_planning_params);
+
+        } else {
+            // In MAPPING mode, generate a simple and stable path for mapping
+            trajectory_points_ = trajectory_generator_->generatePathFromClosestCones(cones_for_planning, current_planning_params);
+        }
     }
 
     // =================================================================
     // STEP 5: CONTROL - "How do I get there?"
     // =================================================================
-    
-    // 1. 현재 주행 모드에 맞는 제어 파라미터 선택
-    const auto& current_control_params = (current_mode_ == DrivingMode::RACING)
+    // Default control command(STOP)
+    double final_steering = 0.0;
+    double final_throttle = 0.0;
+    double final_brake = 1.0;
+
+    // Choose control method depending on the vehicle's state
+    if (planning_state_ == ASState::AS_FINISHED) {
+        double distance_past_line = std::abs(vehicle_position_relative_to_line_);
+
+        // slow speed mode in finish stop distance
+        if (distance_past_line < planning_params_->behavioral_logic.finish_stop_distance_) {
+            trajectory_points_ = trajectory_generator_->generateStopTrajectory();
+            for(auto& point : trajectory_points_) { point.speed = 1.0; }
+
+            const auto& control_params = control_params_->mapping_mode;
+            final_steering = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_, control_params, control_params_->vehicle_length_);
+            final_throttle = longitudinal_controller_->calculate(1.0, vehicle_state.speed, control_params.pid_kp_, control_params.pid_ki_, control_params.pid_kd_, control_params.max_throttle_);
+            final_brake = 0.0;
+
+        // Absolute STOP
+        } else {
+            final_steering = 0.0;
+            final_throttle = 0.0;
+            final_brake = 1.0;
+        }
+
+    } else if (planning_state_ == ASState::AS_DRIVING) {
+        const auto& planning_params = (current_mode_ == DrivingMode::RACING)
+                                        ? planning_params_->trajectory_generation.racing_mode
+                                        : planning_params_->trajectory_generation.mapping_mode;
+
+        const auto& control_params = (current_mode_ == DrivingMode::RACING)
                                          ? control_params_->racing_mode
                                          : control_params_->mapping_mode;
 
-    // 2. 횡방향 제어: 경로와 현재 상태, 그리고 현재 모드 파라미터를 기반으로 조향각 계산
-    double steering_angle = lateral_controller_->calculateSteeringAngle(vehicle_state,
-                                                                        trajectory_points_,
-                                                                        current_control_params,
-                                                                        control_params_->vehicle_length_);
+        final_steering = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_, control_params, control_params_->vehicle_length_);
+        
+        double base_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].speed;
+        double steering_dampening = std::abs(final_steering) * control_params.steering_based_speed_gain_;
+        double final_target_speed = base_target_speed - steering_dampening;
+        final_target_speed = std::max(planning_params.min_speed_, final_target_speed);
+        
+        final_throttle = longitudinal_controller_->calculate(final_target_speed, vehicle_state.speed, control_params.pid_kp_, control_params.pid_ki_, control_params.pid_kd_, control_params.max_throttle_);
+        
+        if (final_throttle > 0.0) {
+            final_brake = 0.0;
 
-    // 3. 종방향 제어: 목표 속도와 현재 속도를 기반으로 스로틀 계산
-    double base_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].speed;
-
-    // 3-1. (실시간 보정) 계산된 스티어링 각도에 비례하여 목표 속도를 추가로 감속
-    double steering_dampening = std::abs(steering_angle) * current_control_params.steering_based_speed_gain_;
-    double final_target_speed = base_target_speed - steering_dampening;
-
-    // 3-2. 최종 목표 속도가 planning_params_의 최소 속도보다 낮아지지 않도록 제한
-    final_target_speed = std::max(current_planning_params.min_speed_, final_target_speed);
-
-    // 3-3. 최종 목표 속도를 바탕으로 PID 제어기를 통해 스로틀 계산
-    double throttle = longitudinal_controller_->calculate(final_target_speed,
-                                                          vehicle_state.speed,
-                                                          current_control_params.pid_kp_,
-                                                          current_control_params.pid_ki_,
-                                                          current_control_params.pid_kd_,
-                                                          current_control_params.max_throttle_);
-
-    // 4. 계산된 제어 명령을 멤버 변수에 저장
-    control_command_msg.steering = -steering_angle; // FSDS 좌표계에 맞게 음수(-) 적용
-    if (throttle > 0.0){
-        control_command_msg.throttle = throttle;
-        control_command_msg.brake = 0.0;
-
-    } else{
-        control_command_msg.throttle = 0.0;
-        control_command_msg.brake = -throttle; // 급정지를 막기 위해 브레이크는 0으로 유지 (필요 시 수정)
+        // 주행 중에는 급정지를 막기 위해 브레이크를 0으로 유지 (필요시 수정)
+        } else {
+            final_brake = 0.0;
+            final_throttle = 0.0;
+        }
     }
+
+    // 계산된 값을 최종적으로 제어 명령에 '할당' (한 곳에서만 처리)
+    control_command_msg.steering = -final_steering; // FSDS 좌표계에 맞게 음수(-) 적용
+    control_command_msg.throttle = final_throttle;
+    control_command_msg.brake = final_brake;
 
     // Debug
     static int count = 0;
@@ -2301,7 +2345,7 @@ void FormulaAutonomousSystem::setRacingStrategy(const VehicleState& vehicle_stat
     }
 
     // 2. Update the lap count if the line has been defined.
-    if (is_start_finish_line_defined_) {
+    if (is_start_finish_line_defined_ && !is_race_finished_) {
         updateLapCount(vehicle_state);
     }
     
@@ -2391,6 +2435,14 @@ void FormulaAutonomousSystem::updateLapCount(const VehicleState& current_state) 
             ROS_INFO("================================================");
             ROS_INFO("FormulaAutonomousSystem: Crossed line! New Lap: %d", current_lap_);
             ROS_INFO("================================================");
+
+            if (current_lap_ > planning_params_->behavioral_logic.total_laps_) {
+                ROS_INFO("================================================");
+                ROS_INFO("FormulaAutonomousSystem: Final lap complete! Finishing race...");
+                ROS_INFO("================================================");
+                is_race_finished_ = true;
+                state_machine_->processEvent(ASEvent::RACE_FINISHED);
+            }
         }
     }
 

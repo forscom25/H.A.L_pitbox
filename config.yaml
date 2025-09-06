@@ -154,11 +154,12 @@ planning:
       waypoint_spacing: 0.5
       max_speed: 7.0
       min_speed: 3.0
-      curvature_gain: 3.5
+      curvature_gain: 3.8
 
   behavioral_logic:
     # Lap Counting & Race Logic
-    total_laps: 10
+    total_laps: 2
+    finish_stop_distance: 5.0
 
 # ===========================================
 # Control Parameters

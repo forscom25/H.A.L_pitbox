@@ -1043,13 +1043,15 @@ enum class ASState {
     AS_OFF = 0,        // 자율주행 시스템이 비활성화된 상태
     AS_READY = 1,      // 주행 준비가 완료되어 오퍼레이터의 GO 신호를 대기하는 상태
     AS_DRIVING = 2,    // 자율주행으로 트랙을 주행 중인 상태
+    AS_FINISHED = 3    // 레이스를 완료하고 정지를 준비하는 상태
 };
 
 // Event types that can trigger state transitions
 enum class ASEvent {
     SYSTEM_INIT,        // 시스템 초기화 완료
     SYSTEM_READY,       // 모든 서브시스템 준비 완료
-    GO_SIGNAL          // 오퍼레이터 GO 신호 수신
+    GO_SIGNAL,          // 오퍼레이터 GO 신호 수신
+    RACE_FINISHED       // 레이스 완료 신호
 };
 
 // State transition result
@@ -1373,6 +1375,7 @@ struct PlanningParams {
 
     struct BehavioralLogic {
         int total_laps_;
+        double finish_stop_distance_;
     };
     
     // Main parameter holders
@@ -1398,6 +1401,7 @@ struct PlanningParams {
 
         printf("\n[Behavioral Logic]\n");
         printf("  Total Laps: %d\n", behavioral_logic.total_laps_);
+        printf("  Finish Stop Distance: %.3f m\n", behavioral_logic.finish_stop_distance_);
     }
 
     // Load all planning parameters from ROS NodeHandle
@@ -1419,6 +1423,7 @@ struct PlanningParams {
         
         // Load Behavioral Logic parameters
         if(!pnh.getParam("/planning/behavioral_logic/total_laps", behavioral_logic.total_laps_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
+        if(!pnh.getParam("/planning/behavioral_logic/finish_stop_distance", behavioral_logic.finish_stop_distance_)){std::cerr<<"Param /planning/behavioral_logic/finish_stop_distance" << std::endl; return false; } // 추가
         
         return true;
     }
@@ -1763,10 +1768,12 @@ private:
     bool enterAS_OFF();
     bool enterAS_READY();
     bool enterAS_DRIVING();
+    bool enterAS_FINISHED();
     
     bool exitAS_OFF();
     bool exitAS_READY();
     bool exitAS_DRIVING();
+    bool exitAS_FINISHED();
     
     // Internal state management
     bool performStateTransition(ASState new_state, const std::string& reason);
@@ -1802,6 +1809,7 @@ public:
     std::vector<TrajectoryPoint> generatePathFromClosestCones(const std::vector<Cone>& cones, const PlanningParams::TrajectoryModeParams& params);
     // Generate local trajectory by following the global path (for RACING mode)
     std::vector<TrajectoryPoint> getTrajectoryFromGlobalPath(const VehicleState& vehicle_state, const std::vector<TrajectoryPoint>& global_path, const PlanningParams::TrajectoryModeParams& params);
+    std::vector<TrajectoryPoint> generateStopTrajectory();
 
     /**
      * @brief Get last generated trajectory
@@ -1828,7 +1836,6 @@ private:
     double calculateCurvature(const tk::spline& s, double x);
     double calculateDistance(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2) const;
     double calculateAngle(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2) const;
-    std::vector<TrajectoryPoint> generateStopTrajectory();
 
     // Member variables
     std::shared_ptr<PlanningParams> params_;
@@ -1946,6 +1953,7 @@ public:
         }
         return {};
     }
+    
     Eigen::Vector2d getStartFinishLineCenter() const { return start_finish_line_center_; }
     Eigen::Vector2d getStartFinishLineDirection() const { return start_finish_line_direction_; }
     bool isStartFinishLineDefined() const { return is_start_finish_line_defined_; }
@@ -2003,6 +2011,8 @@ private:
     // Driving mode and lap counting
     DrivingMode current_mode_;
     int current_lap_;
+    bool is_race_finished_;
+
     Eigen::Vector2d start_finish_line_center_;
     Eigen::Vector2d start_finish_line_direction_;
     double start_finish_line_yaw_;
