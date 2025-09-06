@@ -44,10 +44,10 @@
 
 // Select window left-top corner
     int x = static_cast<int>(center.x) - half_size;
-    int y = static_cast<int>(center.y) - half_size + (window_size / 4);
+    int y = static_cast<int>(center.y) - half_size + (window_size / 6);
 
 // Transform from Vehicle base to camera coordinate system
-    cv::Mat cone_point_in_base = (cv::Mat_<double>(3, 1) << point_3d.x, point_3d.y, point_3d.z-0.08);
+    cv::Mat cone_point_in_base = (cv::Mat_<double>(3, 1) << point_3d.x, point_3d.y, point_3d.z-0.05);
 
 
 std::string ColorDetection::selectBestColor(const ColorConfidence& confidence) {
