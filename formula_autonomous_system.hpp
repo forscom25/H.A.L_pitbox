@@ -1366,9 +1366,9 @@ struct PlanningParams {
         double lane_offset_;                // Offset from single cone (m)
         //[추가] Complexity Logic Parameters
         bool complexity_enable_;
-        int complexity_window_size_;
-        int complexity_sign_change_threshold_;
         double complexity_speed_;
+        double complexity_check_distance_;
+        double complexity_vibration_threshold_;
     };
 
     struct TrajectoryGeneration {
@@ -1421,11 +1421,11 @@ struct PlanningParams {
         if(!pnh.getParam("/planning/trajectory_generation/racing_mode/max_speed", trajectory_generation.racing_mode.max_speed_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
         if(!pnh.getParam("/planning/trajectory_generation/racing_mode/min_speed", trajectory_generation.racing_mode.min_speed_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
         if(!pnh.getParam("/planning/trajectory_generation/racing_mode/curvature_gain", trajectory_generation.racing_mode.curvature_gain_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
-        // [추가] Complexity Logic parameters 로딩
+        // Complexity Logic parameters 로딩
         if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/enable", trajectory_generation.racing_mode.complexity_enable_)){std::cerr<<"Param error" << std::endl; return false; }
-        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/window_size", trajectory_generation.racing_mode.complexity_window_size_)){std::cerr<<"Param error" << std::endl; return false; }
-        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/sign_change_threshold", trajectory_generation.racing_mode.complexity_sign_change_threshold_)){std::cerr<<"Param error" << std::endl; return false; }
         if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/speed", trajectory_generation.racing_mode.complexity_speed_)){std::cerr<<"Param error" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/check_distance", trajectory_generation.racing_mode.complexity_check_distance_)){std::cerr<<"Param error" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/vibration_threshold", trajectory_generation.racing_mode.complexity_vibration_threshold_)){std::cerr<<"Param error" << std::endl; return false; }
         // Load Behavioral Logic parameters
         if(!pnh.getParam("/planning/behavioral_logic/total_laps", behavioral_logic.total_laps_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
         
