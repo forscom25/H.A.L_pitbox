@@ -547,7 +547,7 @@ std::vector<Cone> ColorDetection::classifyConesColor(const std::vector<Cone>& co
 
 cv::Point2f ColorDetection::projectToCamera(const pcl::PointXYZ& point_3d, int camera_id) {
     // Transform from Vehicle base to camera coordinate system
-    cv::Mat cone_point_in_base = (cv::Mat_<double>(3, 1) << point_3d.x, point_3d.y, point_3d.z-0.08);
+    cv::Mat cone_point_in_base = (cv::Mat_<double>(3, 1) << point_3d.x, point_3d.y, point_3d.z-0.05);
     cv::Mat cone_point_in_camera;
     
     if (camera_id == 1) { // Left Camera
@@ -660,7 +660,7 @@ cv::Rect ColorDetection::getSafeWindow(const cv::Point2f& center, int window_siz
     
     // Select window left-top corner
     int x = static_cast<int>(center.x) - half_size;
-    int y = static_cast<int>(center.y) - half_size + (window_size / 5);
+    int y = static_cast<int>(center.y) - half_size - (window_size / 6);
     
     // Clamp to image boundaries
     x = std::max(0, std::min(x, image_size.width - window_size));
