@@ -28,10 +28,10 @@
 
   # HSV thresholds for blue cone detection
   camera_hsv_blue:
-    hue_min: 95
+    hue_min: 90
     hue_max: 110
-    saturation_min: 85
-    value_min: 95
+    saturation_min: 80
+    value_min: 9
 
   # HSV thresholds for orange cone detection
   camera_hsv_orange:
@@ -47,7 +47,7 @@
     int y = static_cast<int>(center.y) - half_size + (window_size / 5);
 
 // Transform from Vehicle base to camera coordinate system
-    cv::Mat cone_point_in_base = (cv::Mat_<double>(3, 1) << point_3d.x, point_3d.y, point_3d.z-0.05);
+    cv::Mat cone_point_in_base = (cv::Mat_<double>(3, 1) << point_3d.x, point_3d.y, point_3d.z-0.1);
 
 
 std::string ColorDetection::selectBestColor(const ColorConfidence& confidence) {
