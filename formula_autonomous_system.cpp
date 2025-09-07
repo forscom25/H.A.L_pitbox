@@ -1990,7 +1990,9 @@ FormulaAutonomousSystem::FormulaAutonomousSystem():
     is_global_path_generated_(false),
     current_lap_(0),
     is_race_finished_(false),
-    vehicle_position_relative_to_line_(0.0) {
+    vehicle_position_relative_to_line_(0.0)
+    {
+        last_lap_time_ = ros::Time(0);
 }
 
 FormulaAutonomousSystem::~FormulaAutonomousSystem(){
@@ -2341,7 +2343,7 @@ std::vector<Cone> FormulaAutonomousSystem::getGlobalConeMap() const {
 void FormulaAutonomousSystem::setRacingStrategy(const VehicleState& vehicle_state, const std::vector<Cone>& cones_for_planning) {
     // 1. Define the start/finish line if it hasn't been defined yet.
     if (!is_start_finish_line_defined_) {
-        defineStartFinishLine(cones_for_planning);
+        defineStartFinishLine(vehicle_state, cones_for_planning);
     }
 
     // 2. Update the lap count if the line has been defined.
@@ -2370,7 +2372,7 @@ void FormulaAutonomousSystem::setRacingStrategy(const VehicleState& vehicle_stat
 /**
  * @brief Defines the start/finish line using four orange cones.
  */
-void FormulaAutonomousSystem::defineStartFinishLine(const std::vector<Cone>& cones) {
+void FormulaAutonomousSystem::defineStartFinishLine(const VehicleState& vehicle_state, const std::vector<Cone>& cones) {
 
     std::vector<Eigen::Vector2d> orange_cones;
 
@@ -2392,19 +2394,29 @@ void FormulaAutonomousSystem::defineStartFinishLine(const std::vector<Cone>& con
     // The two cones with the largest y are left, the two with the smallest y are right.
     Eigen::Vector2d left_midpoint = (orange_cones[0] + orange_cones[1]) / 2.0;
     Eigen::Vector2d right_midpoint = (orange_cones[orange_cones.size()-1] + orange_cones[orange_cones.size()-2]) / 2.0;
+    Eigen::Vector2d local_center = (left_midpoint + right_midpoint) / 2.0;
+    Eigen::Vector2d local_direction = (left_midpoint - right_midpoint).normalized(); // The direction vector of the line goes from right to left.
 
-    // The center of the start line is the midpoint of the two midpoints.
-    start_finish_line_center_ = (left_midpoint + right_midpoint) / 2.0;
+    // Vehicle frame -> Global frame
+    double vehicle_x = vehicle_state.position.x();
+    double vehicle_y = vehicle_state.position.y();
+    double vehicle_yaw = vehicle_state.yaw;
 
-    // The direction vector of the line goes from right to left.
-    start_finish_line_direction_ = (left_midpoint - right_midpoint).normalized();
+    start_finish_line_center_.x() = vehicle_x + local_center.x() * std::cos(vehicle_yaw) - local_center.y() * std::sin(vehicle_yaw);
+    start_finish_line_center_.y() = vehicle_y + local_center.x() * std::sin(vehicle_yaw) + local_center.y() * std::cos(vehicle_yaw);
+
+    start_finish_line_direction_.x() = local_direction.x() * std::cos(vehicle_yaw) - local_direction.y() * std::sin(vehicle_yaw);
+    start_finish_line_direction_.y() = local_direction.x() * std::sin(vehicle_yaw) + local_direction.y() * std::cos(vehicle_yaw);
 
     // The yaw of the line is perpendicular to its direction.
     start_finish_line_yaw_ = std::atan2(start_finish_line_direction_.y(), start_finish_line_direction_.x()) - M_PI / 2.0;
+
     is_start_finish_line_defined_ = true;
     just_crossed_line_ = true; // IMPORTANT: Prevent counting the first pass right after starting.
     current_lap_ = 1;
-    ROS_INFO("FormulaAutonomousSystem: Start/Finish line defined at (%.2f, %.2f) with direction (%.2f, %.2f)",
+    last_lap_time_ = ros::Time::now();
+
+    ROS_INFO("FormulaAutonomousSystem: Start/Finish line defined at GLOBAL (%.2f, %.2f) with direction (%.2f, %.2f)",
              start_finish_line_center_.x(), start_finish_line_center_.y(),
              start_finish_line_direction_.x(), start_finish_line_direction_.y());
 }
@@ -2416,10 +2428,42 @@ void FormulaAutonomousSystem::updateLapCount(const VehicleState& current_state) 
 
     Eigen::Vector2d car_position_vec(current_state.position.x(), current_state.position.y());
 
+    // 1. Proximity Gate
+    // 결승선 중심으로부터의 직선 거리를 계산합니다.
+    double dist_from_line_center = (car_position_vec - start_finish_line_center_).norm();
+    
+    // 차량이 결승선 근처(예: 10m 이내)에 있지 않다면, 랩 카운트 검사를 아예 실행하지 않습니다.
+    const double PROXIMITY_GATE_RADIUS = 10.0;
+
+    // Reset the 'just_crossed_line_' flag only when the car is far away from the line on the "after" side.
+    // This prevents re-triggering if the car wiggles across the line.
+    if (dist_from_line_center > PROXIMITY_GATE_RADIUS) {
+        // `just_crossed_line_` 플래그는 결승선에서 멀어졌을 때 리셋되어야 하므로, 이 로직은 게이트 밖에 둡니다.
+        if (just_crossed_line_) {
+            just_crossed_line_ = false;
+        }
+        return; // Quit function
+    }
+
     // Vector from the line center to the car
     Eigen::Vector2d vec_to_car = car_position_vec - start_finish_line_center_;
-    // Normal vector to the line (points in the direction of travel)
-    Eigen::Vector2d line_normal(-start_finish_line_direction_.y(), start_finish_line_direction_.x());
+
+    // 2. Dynamic Normal Vector for pass test
+    Eigen::Vector2d line_normal_candidate1(-start_finish_line_direction_.y(), start_finish_line_direction_.x());
+    Eigen::Vector2d line_normal_candidate2(start_finish_line_direction_.y(), -start_finish_line_direction_.x());
+
+    // Calculate vehicle heading
+    Eigen::Vector2d vehicle_heading_vec(std::cos(current_state.yaw), std::sin(current_state.yaw));
+
+    // Choose normal vector closer to the vehicle heading(bigger dot product)
+    Eigen::Vector2d line_normal;
+
+    if (line_normal_candidate1.dot(vehicle_heading_vec) > line_normal_candidate2.dot(vehicle_heading_vec)) {
+        line_normal = line_normal_candidate1;
+
+    } else {
+        line_normal = line_normal_candidate2;
+    }
 
     // Project the vector to the car onto the normal vector to find out which side of the line we are on.
     double previous_position_relative = vehicle_position_relative_to_line_;
@@ -2427,11 +2471,16 @@ void FormulaAutonomousSystem::updateLapCount(const VehicleState& current_state) 
 
     // Check for sign change (crossing the line)
     // We crossed if the product of the previous and current relative positions is negative.
-    if (previous_position_relative > 0 && vehicle_position_relative_to_line_ <= 0) {
+    if (previous_position_relative < 0 && vehicle_position_relative_to_line_ >= 0) {
+
+        // 3. Time filter
+        const double MINIMUM_LAP_TIME_SEC = 15.0;
 
         if (!just_crossed_line_) {
             current_lap_++;
             just_crossed_line_ = true; // Set flag to prevent double counting
+            last_lap_time_ = ros::Time::now();
+
             ROS_INFO("================================================");
             ROS_INFO("FormulaAutonomousSystem: Crossed line! New Lap: %d", current_lap_);
             ROS_INFO("================================================");
@@ -2444,13 +2493,5 @@ void FormulaAutonomousSystem::updateLapCount(const VehicleState& current_state) 
                 state_machine_->processEvent(ASEvent::RACE_FINISHED);
             }
         }
-    }
-
-    // Reset the 'just_crossed_line_' flag only when the car is far away from the line on the "after" side.
-    // This prevents re-triggering if the car wiggles across the line.
-    double dist_from_line_center = (car_position_vec - start_finish_line_center_).norm();
-
-    if (just_crossed_line_ && dist_from_line_center > 10.0) { // 10m 이상 멀어지면 리셋
-        just_crossed_line_ = false;
     }
 }

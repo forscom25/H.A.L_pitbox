@@ -1980,7 +1980,7 @@ private:
     void getCameraImage(sensor_msgs::Image& msg, cv::Mat& image);
     void getImuData(sensor_msgs::Imu& msg, Eigen::Vector3d& acc, Eigen::Vector3d& gyro, Eigen::Quaterniond& orientation);
     void setRacingStrategy(const VehicleState& vehicle_state, const std::vector<Cone>& cones_for_planning);
-    void defineStartFinishLine(const std::vector<Cone>& cones);
+    void defineStartFinishLine(const VehicleState& vehicle_state, const std::vector<Cone>& cones);
     void updateLapCount(const VehicleState& current_state);
     void generateGlobalPath();
 
@@ -2019,6 +2019,7 @@ private:
     bool is_start_finish_line_defined_;
     bool just_crossed_line_;
     double vehicle_position_relative_to_line_;
+    ros::Time last_lap_time_;
 
     // Trajectory planning
     std::shared_ptr<PlanningParams> planning_params_;
