@@ -152,7 +152,7 @@ planning:
     racing_mode:
       lookahead_distance: 15.0
       waypoint_spacing: 0.5
-      max_speed: 8.0
+      max_speed: 9.0
       min_speed: 3.0
       curvature_gain: 3.8
 
