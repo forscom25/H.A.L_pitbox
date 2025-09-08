@@ -1782,10 +1782,12 @@ private:
     bool enterAS_OFF();
     bool enterAS_READY();
     bool enterAS_DRIVING();
+    bool enterAS_FINISHED();
     
     bool exitAS_OFF();
     bool exitAS_READY();
     bool exitAS_DRIVING();
+    bool exitAS_FINISHED();
     
     // Internal state management
     bool performStateTransition(ASState new_state, const std::string& reason);
