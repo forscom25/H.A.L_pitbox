@@ -1356,6 +1356,10 @@ void StateMachine::initializeValidTransitions() {
     
     // AS_DRIVING transitions
     valid_transitions_[{ASState::AS_DRIVING, ASState::AS_OFF}] = true;
+    valid_transitions_[{ASState::AS_DRIVING, ASState::AS_FINISHED}] = true;
+
+    // AS_FINISHED transitions
+    valid_transitions_[{ASState::AS_FINISHED, ASState::AS_OFF}] = true;
 }
 
 bool StateMachine::isValidTransition(ASState from, ASState to) const {
@@ -1378,6 +1382,13 @@ StateTransitionResult StateMachine::processEvent(ASEvent event) {
             if (current_state_ == ASState::AS_READY) {
                 target_state = ASState::AS_DRIVING;
                 mission_active_ = true;
+            }
+            break;
+
+            // Finishing event
+        case ASEvent::RACE_FINISHED:
+            if (current_state_ == ASState::AS_DRIVING) {
+                target_state = ASState::AS_FINISHED;
             }
             break;
         default:
@@ -1453,11 +1464,17 @@ bool StateMachine::enterAS_DRIVING() {
     return true;
 }
 
+bool StateMachine::enterAS_FINISHED() {
+    std::cout << "StateMachine: Entering AS_FINISHED state" << std::endl;
+    mission_active_ = false; // Race finished, deactivate mission
+    return true;
+}
+
 // State exit functions
 bool StateMachine::exitAS_OFF() { return true; }
 bool StateMachine::exitAS_READY() { return true; }
 bool StateMachine::exitAS_DRIVING() { return true; }
-
+bool StateMachine::exitAS_FINISHED() { return true; }
 void StateMachine::injectSystemInit() {
     processEvent(ASEvent::SYSTEM_INIT);
 }
@@ -1488,6 +1505,7 @@ std::string StateMachine::stateToString(ASState state) const {
         case ASState::AS_OFF: return "AS_OFF";
         case ASState::AS_READY: return "AS_READY";
         case ASState::AS_DRIVING: return "AS_DRIVING";
+        case ASState::AS_FINISHED: return "AS_FINISHED";
         default: return "UNKNOWN";
     }
 }
@@ -1497,6 +1515,7 @@ std::string StateMachine::eventToString(ASEvent event) const {
         case ASEvent::SYSTEM_INIT: return "SYSTEM_INIT";
         case ASEvent::SYSTEM_READY: return "SYSTEM_READY";
         case ASEvent::GO_SIGNAL: return "GO_SIGNAL";
+        case ASEvent::RACE_FINISHED: return "RACE_FINISHED";
         default: return "UNKNOWN_EVENT";
     }
 }
@@ -2189,7 +2208,7 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     // STEP 2: CHECK DRIVING CONDITIONS - "Can I drive?"
     // =================================================================
 
-    if (planning_state_ != ASState::AS_DRIVING) {
+    if (planning_state_ != ASState::AS_DRIVING && planning_state_ != ASState::AS_FINISHED) {
         control_command_msg.steering = 0.0;
         control_command_msg.throttle = 0.0;
         control_command_msg.brake = 1.0;
