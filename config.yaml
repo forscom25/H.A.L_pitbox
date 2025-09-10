@@ -155,6 +155,8 @@ planning:
       max_speed: 8.0
       min_speed: 5.0
       curvature_gain: 3.8
+      curvature_threshold: 0.05
+      min_segment_length: 5.0
 
   behavioral_logic:
     # Lap Counting & Race Logic

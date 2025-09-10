@@ -1792,6 +1792,58 @@ void FormulaAutonomousSystem::generateGlobalPath() {
         // Store the complete TrajectoryPoint in the global_path_
         global_path_.emplace_back(x, y, yaw, curvature, speed, s);
     }
+
+    // speed profiling based on critical sections
+    // 1. Search critical sections
+    const double CURVATURE_THRESHOLD = params.curvature_threshold_;
+    const double MIN_SEGMENT_LENGTH = params.min_segment_length_;
+
+    critical_sections_.clear();
+    bool in_section = false;
+    size_t section_start_idx = 0;
+
+    for (size_t i = 0; i < global_path_.size(); ++i) {
+        // Entering critical section
+        if (global_path_[i].curvature > CURVATURE_THRESHOLD && !in_section) {
+            in_section = true;
+            section_start_idx = i;
+
+        // Exiting critical section
+        } else if (global_path_[i].curvature < CURVATURE_THRESHOLD && in_section) {
+            in_section = false;
+            double segment_length = global_path_[i].s - global_path_[section_start_idx].s;
+
+            // long enough to be a critical section
+            if (segment_length >= MIN_SEGMENT_LENGTH) {
+                critical_sections_.push_back({section_start_idx, i});
+            }
+        }
+    }
+
+    if (in_section) {
+        double segment_length = global_path_.back().s - global_path_[section_start_idx].s;
+        if (segment_length >= MIN_SEGMENT_LENGTH) {
+            critical_sections_.push_back({section_start_idx, global_path_.size() - 1});
+        }
+    }
+
+    // 2. Set minimum speed for each critical section
+    std::vector<double> section_min_speeds;
+    for (const auto& section : critical_sections_) {
+        double max_curvature_in_section = 0.0;
+        for (size_t i = section.first; i <= section.second; ++i) {
+            max_curvature_in_section = std::max(max_curvature_in_section, global_path_[i].curvature);
+        }
+        double min_speed = params.max_speed_ / (1.0 + params.curvature_gain_ * max_curvature_in_section);
+        section_min_speeds.push_back(std::max(params.min_speed_, min_speed));
+    }
+
+    // 3. Update target speed in critical section
+    for (size_t i = 0; i < critical_sections_.size(); ++i) {
+        for (size_t j = critical_sections_[i].first; j <= critical_sections_[i].second; ++j) {
+            global_path_[j].speed = section_min_speeds[i];
+        }
+    }
 }
 
 // ================================================================================================

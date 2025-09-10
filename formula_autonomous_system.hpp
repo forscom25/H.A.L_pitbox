@@ -1365,6 +1365,8 @@ struct PlanningParams {
         double max_speed_;                  // Max speed (m/s)
         double min_speed_;                  // Minimum speed (m/s)
         double curvature_gain_;             // curvature gain for speed adjustment
+        double curvature_threshold_;        // threshold for determining critical section
+        double min_segment_length_;         // critical section length (m)
         double lane_offset_;                // Offset from single cone (m)
     };
 
@@ -1398,6 +1400,8 @@ struct PlanningParams {
         printf("  Max Speed: %.3f m/s\n", trajectory_generation.racing_mode.max_speed_);
         printf("  Min Speed: %.3f m/s\n", trajectory_generation.racing_mode.min_speed_);
         printf("  Curvature Gain: %.3f\n", trajectory_generation.racing_mode.curvature_gain_);
+        printf("  Curvature Threshold: %.3f\n", trajectory_generation.racing_mode.curvature_threshold_);
+        printf("  Min Segment Length: %.3f m\n", trajectory_generation.racing_mode.min_segment_length_);
 
         printf("\n[Behavioral Logic]\n");
         printf("  Total Laps: %d\n", behavioral_logic.total_laps_);
@@ -1417,12 +1421,14 @@ struct PlanningParams {
         // Load Trajectory Generation -> Racing Mode parameters
         if(!pnh.getParam("/planning/trajectory_generation/racing_mode/lookahead_distance", trajectory_generation.racing_mode.lookahead_distance_)){std::cerr<<"Param /planning/trajectory_generation/racing_mode/lookahead_distance" << std::endl; return false; }
         if(!pnh.getParam("/planning/trajectory_generation/racing_mode/waypoint_spacing", trajectory_generation.racing_mode.waypoint_spacing_)){std::cerr<<"Param /planning/trajectory_generation/racing_mode/lookahead_distance" << std::endl; return false; }
-        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/max_speed", trajectory_generation.racing_mode.max_speed_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
-        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/min_speed", trajectory_generation.racing_mode.min_speed_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
-        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/curvature_gain", trajectory_generation.racing_mode.curvature_gain_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
-        
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/max_speed", trajectory_generation.racing_mode.max_speed_)){std::cerr<<"Param /planning/trajectory_generation/racing_mode/lookahead_distance" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/min_speed", trajectory_generation.racing_mode.min_speed_)){std::cerr<<"Param /planning/trajectory_generation/racing_mode/lookahead_distance" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/curvature_gain", trajectory_generation.racing_mode.curvature_gain_)){std::cerr<<"Param /planning/trajectory_generation/racing_mode/lookahead_distance" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/curvature_threshold", trajectory_generation.racing_mode.curvature_threshold_)){std::cerr<<"Param /planning/trajectory_generation/racing_mode/curvature_threshold" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/min_segment_length", trajectory_generation.racing_mode.min_segment_length_)){std::cerr<<"Param /planning/trajectory_generation/racing_mode/min_segment_length" << std::endl; return false; }
+
         // Load Behavioral Logic parameters
-        if(!pnh.getParam("/planning/behavioral_logic/total_laps", behavioral_logic.total_laps_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
+        if(!pnh.getParam("/planning/behavioral_logic/total_laps", behavioral_logic.total_laps_)){std::cerr<<"Param /planning/behavioral_logic/total_laps" << std::endl; return false; }
         if(!pnh.getParam("/planning/behavioral_logic/finish_stop_distance", behavioral_logic.finish_stop_distance_)){std::cerr<<"Param /planning/behavioral_logic/finish_stop_distance" << std::endl; return false; } // 추가
         
         return true;
@@ -1962,6 +1968,7 @@ public:
     std::vector<TrajectoryPoint> getGlobalPath() const { return global_path_; }
     bool isGlobalPathGenerated() const { return is_global_path_generated_; }
     const std::unique_ptr<TrajectoryGenerator>& getTrajectoryGenerator() const { return trajectory_generator_; }
+    const std::vector<std::pair<size_t, size_t>>& getCriticalSections() const { return critical_sections_; }
 
     private: // Main thread
 
@@ -2028,6 +2035,7 @@ private:
     std::shared_ptr<PlanningParams> planning_params_;
     std::unique_ptr<TrajectoryGenerator> trajectory_generator_;
     std::vector<TrajectoryPoint> global_path_;
+    std::vector<std::pair<size_t, size_t>> critical_sections_;
     bool is_global_path_generated_;
 
     // Control
