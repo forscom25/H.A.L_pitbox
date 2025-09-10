@@ -29,7 +29,7 @@ perception:
   # DBSCAN clustering parameters
   lidar_clustering:
     dbscan_eps: 0.5
-    dbscan_min_points: 2
+    dbscan_min_points: 5
 
   # Cone geometric constraints
   lidar_cone_detection:
@@ -37,7 +37,7 @@ perception:
     cone_max_height: 0.5
     cone_min_radius: 0.00
     cone_max_radius: 0.7
-    cone_min_points: 1
+    cone_min_points: 3
 
   # LiDAR position relative to vehicle base (meters, degrees)
   lidar_extrinsics:
@@ -58,19 +58,19 @@ perception:
     principal_point_x: 320.0
     principal_point_y: 240.0
 
-  # Camera 1 (Left) position relative to vehicle base (meters, degrees)
+  # Camera 1 (Right) position relative to vehicle base (meters, degrees)
   camera1_extrinsics:
     translation_x: -0.43
-    translation_y: 0.15
+    translation_y: -0.15
     translation_z: 0.82
     rotation_roll: 0.0
     rotation_pitch: 0.0
     rotation_yaw: 0.0
 
-  # Camera 2 (Right) position relative to vehicle base (meters, degrees)
+  # Camera 2 (Left) position relative to vehicle base (meters, degrees)
   camera2_extrinsics:
     translation_x: -0.43
-    translation_y: -0.15
+    translation_y: 0.15
     translation_z: 0.82
     rotation_roll: 0.0
     rotation_pitch: 0.0
@@ -145,21 +145,21 @@ planning:
     mapping_mode:
       lookahead_distance: 3.0
       waypoint_spacing: 0.2
-      max_speed: 3.0
+      max_speed: 4.5
       lane_offset: 2.0
 
     # Parameters used during the RACING laps
     racing_mode:
       lookahead_distance: 15.0
       waypoint_spacing: 0.5
-      max_speed: 7.0
-      min_speed: 3.0
+      max_speed: 8.0
+      min_speed: 5.0
       curvature_gain: 3.8
 
   behavioral_logic:
     # Lap Counting & Race Logic
     total_laps: 2
-    finish_stop_distance: 5.0
+    finish_stop_distance: 1.0
 
 # ===========================================
 # Control Parameters
@@ -184,7 +184,7 @@ control:
       pid_ki: 0.0
       pid_kd: 0.01
       max_throttle: 0.4
-      steering_based_speed_gain: 0.0
+      steering_based_speed_gain: 2.0
 
   # Parameters used during the RACING laps
   racing_mode:
@@ -198,11 +198,11 @@ control:
       alpha: 1.0
 
     SpeedControl:
-      pid_kp: 0.4
+      pid_kp: 0.8
       pid_ki: 0.0
       pid_kd: 0.02
       max_throttle: 0.4
-      steering_based_speed_gain: 1.2
+      steering_based_speed_gain: 4.5
 
   Vehicle:
     wheel_base: 1.55

@@ -2347,8 +2347,12 @@ void FormulaAutonomousSystem::setRacingStrategy(const VehicleState& vehicle_stat
     }
 
     // 2. Update the lap count if the line has been defined.
-    if (is_start_finish_line_defined_ && !is_race_finished_) {
-        updateLapCount(vehicle_state);
+    if (is_start_finish_line_defined_) {
+        updateVehiclePositionRelativeToLine(vehicle_state);
+
+        if (!is_race_finished_) {
+            updateLapCount(vehicle_state);
+        }
     }
     
     // 3. Switch driving mode and generate global path after lap 1.
@@ -2429,54 +2433,26 @@ void FormulaAutonomousSystem::updateLapCount(const VehicleState& current_state) 
     Eigen::Vector2d car_position_vec(current_state.position.x(), current_state.position.y());
 
     // 1. Proximity Gate
-    // 결승선 중심으로부터의 직선 거리를 계산합니다.
     double dist_from_line_center = (car_position_vec - start_finish_line_center_).norm();
-    
-    // 차량이 결승선 근처(예: 10m 이내)에 있지 않다면, 랩 카운트 검사를 아예 실행하지 않습니다.
     const double PROXIMITY_GATE_RADIUS = 10.0;
 
     // Reset the 'just_crossed_line_' flag only when the car is far away from the line on the "after" side.
     // This prevents re-triggering if the car wiggles across the line.
     if (dist_from_line_center > PROXIMITY_GATE_RADIUS) {
-        // `just_crossed_line_` 플래그는 결승선에서 멀어졌을 때 리셋되어야 하므로, 이 로직은 게이트 밖에 둡니다.
         if (just_crossed_line_) {
             just_crossed_line_ = false;
         }
         return; // Quit function
     }
 
-    // Vector from the line center to the car
-    Eigen::Vector2d vec_to_car = car_position_vec - start_finish_line_center_;
+    // Check for sign change (crossing the line) using the continuously updated member variables
+    if (previous_position_relative_to_line_ < 0 && vehicle_position_relative_to_line_ >= 0) {
 
-    // 2. Dynamic Normal Vector for pass test
-    Eigen::Vector2d line_normal_candidate1(-start_finish_line_direction_.y(), start_finish_line_direction_.x());
-    Eigen::Vector2d line_normal_candidate2(start_finish_line_direction_.y(), -start_finish_line_direction_.x());
+        // Time filter
+        const double MINIMUM_LAP_TIME_SEC = 15.0; // Prevent double counting on wiggles
+        ros::Duration lap_duration = ros::Time::now() - last_lap_time_;
 
-    // Calculate vehicle heading
-    Eigen::Vector2d vehicle_heading_vec(std::cos(current_state.yaw), std::sin(current_state.yaw));
-
-    // Choose normal vector closer to the vehicle heading(bigger dot product)
-    Eigen::Vector2d line_normal;
-
-    if (line_normal_candidate1.dot(vehicle_heading_vec) > line_normal_candidate2.dot(vehicle_heading_vec)) {
-        line_normal = line_normal_candidate1;
-
-    } else {
-        line_normal = line_normal_candidate2;
-    }
-
-    // Project the vector to the car onto the normal vector to find out which side of the line we are on.
-    double previous_position_relative = vehicle_position_relative_to_line_;
-    vehicle_position_relative_to_line_ = vec_to_car.dot(line_normal);
-
-    // Check for sign change (crossing the line)
-    // We crossed if the product of the previous and current relative positions is negative.
-    if (previous_position_relative < 0 && vehicle_position_relative_to_line_ >= 0) {
-
-        // 3. Time filter
-        const double MINIMUM_LAP_TIME_SEC = 15.0;
-
-        if (!just_crossed_line_) {
+        if (!just_crossed_line_ && lap_duration.toSec() > MINIMUM_LAP_TIME_SEC) {
             current_lap_++;
             just_crossed_line_ = true; // Set flag to prevent double counting
             last_lap_time_ = ros::Time::now();
@@ -2494,4 +2470,21 @@ void FormulaAutonomousSystem::updateLapCount(const VehicleState& current_state) 
             }
         }
     }
+}
+
+void FormulaAutonomousSystem::updateVehiclePositionRelativeToLine(const VehicleState& current_state) {
+    Eigen::Vector2d car_position_vec(current_state.position.x(), current_state.position.y());
+    Eigen::Vector2d vec_to_car = car_position_vec - start_finish_line_center_;
+
+    // Dynamic Normal Vector for pass test
+    Eigen::Vector2d line_normal_candidate1(-start_finish_line_direction_.y(), start_finish_line_direction_.x());
+    Eigen::Vector2d line_normal_candidate2(start_finish_line_direction_.y(), -start_finish_line_direction_.x());
+
+    Eigen::Vector2d vehicle_heading_vec(std::cos(current_state.yaw), std::sin(current_state.yaw));
+    Eigen::Vector2d line_normal = (line_normal_candidate1.dot(vehicle_heading_vec) > line_normal_candidate2.dot(vehicle_heading_vec))
+                                    ? line_normal_candidate1 : line_normal_candidate2;
+
+    // Update previous and current relative positions
+    previous_position_relative_to_line_ = vehicle_position_relative_to_line_;
+    vehicle_position_relative_to_line_ = vec_to_car.dot(line_normal);
 }

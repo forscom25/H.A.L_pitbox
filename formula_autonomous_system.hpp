@@ -1982,6 +1982,7 @@ private:
     void setRacingStrategy(const VehicleState& vehicle_state, const std::vector<Cone>& cones_for_planning);
     void defineStartFinishLine(const VehicleState& vehicle_state, const std::vector<Cone>& cones);
     void updateLapCount(const VehicleState& current_state);
+    void updateVehiclePositionRelativeToLine(const VehicleState& current_state);
     void generateGlobalPath();
 
 // Variables
@@ -2017,8 +2018,10 @@ private:
     Eigen::Vector2d start_finish_line_direction_;
     double start_finish_line_yaw_;
     bool is_start_finish_line_defined_;
+
     bool just_crossed_line_;
     double vehicle_position_relative_to_line_;
+    double previous_position_relative_to_line_;
     ros::Time last_lap_time_;
 
     // Trajectory planning
