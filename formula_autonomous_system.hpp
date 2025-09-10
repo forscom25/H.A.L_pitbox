@@ -1364,11 +1364,13 @@ struct PlanningParams {
         double min_speed_;                  // Minimum speed (m/s)
         double curvature_gain_;             // curvature gain for speed adjustment
         double lane_offset_;                // Offset from single cone (m)
-    // 👇 [추가] S-Curve Logic Parameters
-        bool s_curve_enable_;
-        double s_curve_detection_yaw_rate_threshold_;
-        double s_curve_max_speed_;
-        double s_curve_min_speed_;
+        //[추가] Complexity Logic Parameters
+        bool complexity_enable_;
+        double complexity_low_speed_;
+        double complexity_check_distance_;
+        double complexity_vibration_max_;
+        int complexity_smoothing_window_;
+        double complexity_score_decay_rate_;
     };
 
     struct TrajectoryGeneration {
@@ -1421,11 +1423,13 @@ struct PlanningParams {
         if(!pnh.getParam("/planning/trajectory_generation/racing_mode/max_speed", trajectory_generation.racing_mode.max_speed_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
         if(!pnh.getParam("/planning/trajectory_generation/racing_mode/min_speed", trajectory_generation.racing_mode.min_speed_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
         if(!pnh.getParam("/planning/trajectory_generation/racing_mode/curvature_gain", trajectory_generation.racing_mode.curvature_gain_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
-        // 👇 [추가] Load S-Curve Logic parameters
-        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/s_curve_logic/enable", trajectory_generation.racing_mode.s_curve_enable_)){std::cerr<<"Param error" << std::endl; return false; }
-        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/s_curve_logic/detection_yaw_rate_threshold", trajectory_generation.racing_mode.s_curve_detection_yaw_rate_threshold_)){std::cerr<<"Param error" << std::endl; return false; }
-        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/s_curve_logic/max_speed", trajectory_generation.racing_mode.s_curve_max_speed_)){std::cerr<<"Param error" << std::endl; return false; }
-        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/s_curve_logic/min_speed", trajectory_generation.racing_mode.s_curve_min_speed_)){std::cerr<<"Param error" << std::endl; return false; }
+        // Complexity Logic parameters 로딩
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/enable", trajectory_generation.racing_mode.complexity_enable_)){std::cerr<<"Param error" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/low_speed", trajectory_generation.racing_mode.complexity_low_speed_)){std::cerr<<"Param error" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/check_distance", trajectory_generation.racing_mode.complexity_check_distance_)){std::cerr<<"Param error" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/vibration_max", trajectory_generation.racing_mode.complexity_vibration_max_)){std::cerr<<"Param error" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/smoothing_window", trajectory_generation.racing_mode.complexity_smoothing_window_)){std::cerr<<"Param error" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/score_decay_rate", trajectory_generation.racing_mode.complexity_score_decay_rate_)){std::cerr<<"Param error" << std::endl; return false; }
         // Load Behavioral Logic parameters
         if(!pnh.getParam("/planning/behavioral_logic/total_laps", behavioral_logic.total_laps_)){std::cerr<<"Param /planning/trajectory_generation/mapping_mode/lookahead_distance" << std::endl; return false; }
         
@@ -1453,6 +1457,7 @@ struct ControlParams {
         double pid_kd_;
         double max_throttle_;
         double steering_based_speed_gain_;
+        double speed_control_lpf_alpha_;
          // For Racing Mode (Non-linear)
         //double steering_sensitivity_;
         //double speed_control_steering_lpf_alpha_;
@@ -1490,7 +1495,7 @@ struct ControlParams {
         if(!pnh.getParam("/control/mapping_mode/SpeedControl/pid_kd", mapping_mode.pid_kd_)){std::cerr<<"Param control/mapping_mode/SpeedControl/pid_kd has error" << std::endl; return false;}
         if(!pnh.getParam("/control/mapping_mode/SpeedControl/max_throttle", mapping_mode.max_throttle_)){std::cerr<<"Param control/mapping_mode/SpeedControl/max_throttle has error" << std::endl; return false;}
         if(!pnh.getParam("/control/mapping_mode/SpeedControl/steering_based_speed_gain", mapping_mode.steering_based_speed_gain_)){std::cerr<<"Param control/mapping_mode/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
-
+        if(!pnh.getParam("/control/mapping_mode/SpeedControl/speed_control_lpf_alpha", mapping_mode.speed_control_lpf_alpha_)){std::cerr<<"Param control/mapping_mode/SpeedControl/speed_control_lpf_alpha has error" << std::endl; return false;}
         // ===================  Racing Mode Parameters ===================
         // Pure Pursuit
         if(!pnh.getParam("/control/racing_mode/PurePursuit/lookahead_distance", racing_mode.pp_lookahead_distance_)){std::cerr<<"Param control/racing_mode/PurePursuit/lookahead_distance has error" << std::endl; return false;}
@@ -2032,6 +2037,7 @@ private:
     std::shared_ptr<ControlParams> control_params_;
     std::unique_ptr<LateralController> lateral_controller_;
     std::unique_ptr<PIDController> longitudinal_controller_;
+    double smoothed_mapping_speed_;
 
     //double smoothed_steering_angle_;
 
