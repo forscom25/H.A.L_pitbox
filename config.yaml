@@ -145,7 +145,7 @@ planning:
     mapping_mode:
       lookahead_distance: 3.0
       waypoint_spacing: 0.2
-      max_speed: 3.0
+      max_speed: 4.0
       lane_offset: 2.0
 
     # Parameters used during the RACING laps
@@ -153,17 +153,18 @@ planning:
       lookahead_distance: 15.0
       waypoint_spacing: 0.5
       max_speed: 9.0
-      min_speed: 3.0
+      min_speed: 5.0
       curvature_gain: 3.8
 
-      # 👇 [교체] twistiness_logic 대신 complexity_logic 사용
+      # complexity_logic 사용
       complexity_logic:
         enable: true
         low_speed: 5.0          # 복잡 구간 최저 목표 속도
 
-        check_distance: 20.0         # 몇 미터 구간의 진동을 확인할 것인가 (단위: m)
+        check_distance: 15.0         # 몇 미터 구간의 진동을 확인할 것인가 (단위: m)
         vibration_max: 0.55           # 진동 지수가 이 값 이상이면 '복잡도 100%'로 간주
-        smoothing_window: 15         # 복잡도 점수를 부드럽게 만들기 위한 스무딩 창 크기
+        smoothing_window: 20        # 복잡도 점수를 부드럽게 만들기 위한 스무딩 창 크기
+        score_decay_rate: 0.07 # <-- 이 라인을 추가 (값이 작을수록 매우 천천히 하락)
 
   behavioral_logic:
     # Lap Counting & Race Logic
@@ -192,7 +193,8 @@ control:
       pid_ki: 0.0
       pid_kd: 0.01
       max_throttle: 0.4
-      steering_based_speed_gain: 0.0
+      steering_based_speed_gain: 2.0
+      speed_control_lpf_alpha: 0.5
 
   # Parameters used during the RACING laps
   racing_mode:
@@ -206,9 +208,9 @@ control:
       alpha: 1.0
 
     SpeedControl:
-      pid_kp: 0.4
+      pid_kp: 0.5
       pid_ki: 0.0
-      pid_kd: 0.0
+      pid_kd: 0.03
       max_throttle: 0.4
       # steering_sensitivity: 10.0
       # speed_control_steering_lpf_alpha: 0.95
