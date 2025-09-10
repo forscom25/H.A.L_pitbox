@@ -184,7 +184,7 @@ control:
       pid_ki: 0.0
       pid_kd: 0.01
       max_throttle: 0.4
-      steering_based_speed_gain: 2.0
+      steering_based_speed_gain: 0.0
 
   # Parameters used during the RACING laps
   racing_mode:

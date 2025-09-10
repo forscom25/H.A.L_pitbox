@@ -1810,7 +1810,10 @@ public:
     // Generate local trajectory by following the global path (for RACING mode)
     std::vector<TrajectoryPoint> getTrajectoryFromGlobalPath(const VehicleState& vehicle_state, const std::vector<TrajectoryPoint>& global_path, const PlanningParams::TrajectoryModeParams& params);
     std::vector<TrajectoryPoint> generateStopTrajectory();
+<<<<<<< HEAD
 
+=======
+>>>>>>> 2315d0d2c55c604791a3bc954c3173048097c3f7
     /**
      * @brief Get last generated trajectory
      * @return Last trajectory
@@ -2013,7 +2016,6 @@ private:
     DrivingMode current_mode_;
     int current_lap_;
     bool is_race_finished_;
-
     Eigen::Vector2d start_finish_line_center_;
     Eigen::Vector2d start_finish_line_direction_;
     double start_finish_line_yaw_;
@@ -2033,6 +2035,8 @@ private:
     std::shared_ptr<ControlParams> control_params_;
     std::unique_ptr<LateralController> lateral_controller_;
     std::unique_ptr<PIDController> longitudinal_controller_;
+
+    //double smoothed_steering_angle_;
 
 public:
     // Odometry & TF broadcasting

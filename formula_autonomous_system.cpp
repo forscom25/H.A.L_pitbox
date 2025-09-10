@@ -1391,7 +1391,6 @@ StateTransitionResult StateMachine::processEvent(ASEvent event) {
                 target_state = ASState::AS_FINISHED;
             }
             break;
-
         default:
             return StateTransitionResult(false, current_state_, current_state_, 
                                        "Unknown event: " + reason);
@@ -1476,7 +1475,10 @@ bool StateMachine::exitAS_OFF() { return true; }
 bool StateMachine::exitAS_READY() { return true; }
 bool StateMachine::exitAS_DRIVING() { return true; }
 bool StateMachine::exitAS_FINISHED() { return true; }
+<<<<<<< HEAD
 
+=======
+>>>>>>> 2315d0d2c55c604791a3bc954c3173048097c3f7
 void StateMachine::injectSystemInit() {
     processEvent(ASEvent::SYSTEM_INIT);
 }
