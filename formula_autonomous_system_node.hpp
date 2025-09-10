@@ -194,7 +194,7 @@ public: // ROS
     ros::Publisher lap_count_marker_pub_;
     ros::Publisher global_cones_marker_pub_;
     ros::Publisher lane_marker_pub_;
-    ros::Publisher global_path_marker_pub_;         // Globalpath
+    ros::Publisher global_path_marker_pub_;                    // Globalpath
     ros::Publisher trajectory_from_global_path_marker_pub_;    // TrajectoryFromGlobalpath
 
     // Output messages
@@ -210,6 +210,5 @@ public: // ROS
     // FormulaAutonomousSystem
     std::unique_ptr<FormulaAutonomousSystem> formula_autonomous_system_;
 };
-
 
 #endif // FORMULA_AUTONOMOUS_SYSTEM_NODE_HPP

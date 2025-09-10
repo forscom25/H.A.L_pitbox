@@ -71,9 +71,9 @@ bool FormulaAutonomousSystemNode::init(){
     lap_count_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lap_count_marker", 1);
     global_cones_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/global_cones_marker", 1);
     lane_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lane_marker", 1);
-    global_path_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("/fsds/global_path", 1);        // Globalpath
-    trajectory_from_global_path_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("/fsds/rajectory_from_global_path", 1); // TrajectoryFromGlobalpath
-
+    global_path_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("/fsds/global_path", 1);                                // Globalpath
+    trajectory_from_global_path_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("/fsds/trajectory_from_global_path", 1); // TrajectoryFromGlobalpath
+    
     // Get parameters
     pnh_.getParam("/system/main_loop_rate", main_loop_rate_);
 
@@ -150,9 +150,8 @@ void FormulaAutonomousSystemNode::publish(){
     publishGlobalConesMarker();
     publishLaneMarker();
     publishStartFinishLineMarker();
-    publishGlobalPathMarker();      // Globalpath
-    publishTrajectoryFromGlobalPathMarker();  // TrajectoryFromGlobalpath
-    
+    publishGlobalPathMarker();                  // Globalpath
+    publishTrajectoryFromGlobalPathMarker();    // TrajectoryFromGlobalpath
     return;
 }
 
@@ -539,11 +538,15 @@ void FormulaAutonomousSystemNode::publishLaneMarker() {
 }
 
 // For lap counting
+
+
+
 void FormulaAutonomousSystemNode::publishStartFinishLineMarker() {
+
     if (!formula_autonomous_system_->isStartFinishLineDefined()) {
         return;
     }
-
+    
     // Get the current timestamp from a reliable source
     imu_msg_mutex_.lock();
     ros::Time current_stamp = imu_msg_.header.stamp;
@@ -561,7 +564,7 @@ void FormulaAutonomousSystemNode::publishStartFinishLineMarker() {
     line_marker.action = visualization_msgs::Marker::ADD;
     line_marker.lifetime = ros::Duration(0.2);
     line_marker.pose.orientation.w = 1.0;
-    
+
     // MODIFIED: Make the line thicker and orange
     line_marker.scale.x = 0.5; // <-- CHANGE: Increased thickness
     line_marker.color.r = 1.0; // Orange
@@ -571,12 +574,14 @@ void FormulaAutonomousSystemNode::publishStartFinishLineMarker() {
 
     Eigen::Vector2d center = formula_autonomous_system_->getStartFinishLineCenter();
     Eigen::Vector2d dir = formula_autonomous_system_->getStartFinishLineDirection();
+
     double track_width = 7.0;
 
     geometry_msgs::Point p1, p2;
     p1.x = center.x() - dir.x() * track_width / 2.0;
     p1.y = center.y() - dir.y() * track_width / 2.0;
     p1.z = 0.1;
+
     p2.x = center.x() + dir.x() * track_width / 2.0;
     p2.y = center.y() + dir.y() * track_width / 2.0;
     p2.z = 0.1;
@@ -594,14 +599,12 @@ void FormulaAutonomousSystemNode::publishStartFinishLineMarker() {
     text_marker.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
     text_marker.action = visualization_msgs::Marker::ADD;
     text_marker.lifetime = ros::Duration(0.2);
-    
     text_marker.pose.position.x = 4.0;
     text_marker.pose.position.y = 4.0;
     text_marker.pose.position.z = 4.0;
     text_marker.pose.orientation.w = 1.0;
-
     text_marker.scale.z = 0.8;
-    
+
     // MODIFIED: Make the text green
     text_marker.color.r = 0.0; // Green
     text_marker.color.g = 1.0; // Green
@@ -612,19 +615,19 @@ void FormulaAutonomousSystemNode::publishStartFinishLineMarker() {
     std::stringstream ss;
     ss << "Lap: " << formula_autonomous_system_->getCurrentLap() << " / " << total_laps;
     text_marker.text = ss.str();
-    
     marker_array.markers.push_back(text_marker);
-
     lap_count_marker_pub_.publish(marker_array);
 }
 
 // Globalpath
 void FormulaAutonomousSystemNode::publishGlobalPathMarker() {
+
     if (!formula_autonomous_system_->isGlobalPathGenerated()) {
         return; // Don't publish if the path doesn't exist yet
     }
 
     auto global_path = formula_autonomous_system_->getGlobalPath();
+
     if (global_path.empty()) {
         return;
     }
@@ -634,7 +637,6 @@ void FormulaAutonomousSystemNode::publishGlobalPathMarker() {
     std_msgs::Header header = imu_msg_.header;
     imu_msg_mutex_.unlock();
     header.frame_id = "map"; // The global path is in the "map" frame
-
     visualization_msgs::Marker path_marker;
     path_marker.header = header;
     path_marker.ns = "global_path";
@@ -643,7 +645,6 @@ void FormulaAutonomousSystemNode::publishGlobalPathMarker() {
     path_marker.action = visualization_msgs::Marker::ADD;
     path_marker.lifetime = ros::Duration(); // A duration of 0 means it persists forever
     path_marker.pose.orientation.w = 1.0;
-
     path_marker.scale.x = 0.15; // Line width
     path_marker.color.r = 0.0;  // Cyan color for distinction
     path_marker.color.g = 1.0;
@@ -651,6 +652,7 @@ void FormulaAutonomousSystemNode::publishGlobalPathMarker() {
     path_marker.color.a = 0.8;  // Slightly transparent
 
     for (const auto& point : global_path) {
+
         geometry_msgs::Point p;
         p.x = point.position.x();
         p.y = point.position.y();
@@ -663,6 +665,7 @@ void FormulaAutonomousSystemNode::publishGlobalPathMarker() {
 
 // GlobalpathTrajectory
 void FormulaAutonomousSystemNode::publishTrajectoryFromGlobalPathMarker() { 
+
     if (!formula_autonomous_system_->isGlobalPathGenerated()) {
         return;
     }
@@ -677,7 +680,6 @@ void FormulaAutonomousSystemNode::publishTrajectoryFromGlobalPathMarker() {
     std_msgs::Header header = imu_msg_.header;
     imu_msg_mutex_.unlock();
     header.frame_id = "fsds/FSCar";
-
     visualization_msgs::Marker points_marker;
     points_marker.header = header;
     points_marker.ns = "trajectory_from_global_path"; 
@@ -686,7 +688,6 @@ void FormulaAutonomousSystemNode::publishTrajectoryFromGlobalPathMarker() {
     points_marker.action = visualization_msgs::Marker::ADD;
     points_marker.lifetime = ros::Duration(0.1);
     points_marker.pose.orientation.w = 1.0;
-
     points_marker.scale.x = 0.2;
     points_marker.scale.y = 0.2;
     points_marker.scale.z = 0.2;
@@ -696,6 +697,7 @@ void FormulaAutonomousSystemNode::publishTrajectoryFromGlobalPathMarker() {
     points_marker.color.a = 1.0;
 
     for (const auto& point : local_points) {
+
         geometry_msgs::Point p;
         p.x = point.x();
         p.y = point.y();
