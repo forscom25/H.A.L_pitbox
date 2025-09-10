@@ -1758,7 +1758,8 @@ void FormulaAutonomousSystem::generateGlobalPath() {
         double ddx = spline_x.deriv(2, s);
         double ddy = spline_y.deriv(2, s);
         double yaw = std::atan2(dy, dx);
-        double curvature = std::abs(dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
+        double curvature = (dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
+        ROS_INFO("Path Point s=%.2f, Curvature: %f", s, curvature);
         temp_path.emplace_back(x, y, yaw, curvature, 0.0, s); // 속도는 나중에 계산
     }
 
@@ -1767,39 +1768,68 @@ void FormulaAutonomousSystem::generateGlobalPath() {
         return;
     }
 
-    // 4. Calculate speed for each point
-    for (size_t i = 1; i < temp_path.size() - 1; ++i) {
-        // 기본 속도는 곡률 기반으로 계산
-        double curvature_speed = params.max_speed_ / (1.0 + params.curvature_gain_ * temp_path[i].curvature);
-        
-        double s_curve_speed = params.max_speed_; // S자 코스가 아닐 경우 최대 속도로 초기화
+// formula_autonomous_system.cpp
 
-        if (params.s_curve_enable_) {
-            double prev_yaw = temp_path[i-1].yaw;
-            double next_yaw = temp_path[i+1].yaw;
-            double delta_yaw = next_yaw - prev_yaw;
-            if (delta_yaw > M_PI) delta_yaw -= 2.0 * M_PI;
-            if (delta_yaw < -M_PI) delta_yaw += 2.0 * M_PI;
-            
-            double delta_s = temp_path[i+1].s - temp_path[i-1].s;
-            double yaw_rate = (delta_s > 1e-6) ? std::abs(delta_yaw / delta_s) : 0.0;
+    // ========================[ 최종 '이완 필터' 기반 로직 시작 ]========================
 
-            // yaw_rate가 임계치를 넘으면, 그 정도에 비례하여 속도를 동적으로 감속
-            if (yaw_rate > params.s_curve_detection_yaw_rate_threshold_) {
-                // yaw_rate가 임계치를 얼마나 초과했는지 비율 계산 (0~1)
-                double excess_ratio = std::min(1.0, (yaw_rate - params.s_curve_detection_yaw_rate_threshold_) / (params.s_curve_detection_yaw_rate_threshold_ * 2.0));
-                // S자 코스 속도 범위 내에서 감속
-                s_curve_speed = params.s_curve_max_speed_ - (params.s_curve_max_speed_ - params.s_curve_min_speed_) * excess_ratio;
+    // 1단계: '원시 복잡도 점수' 계산 (기존과 동일)
+    std::vector<double> raw_complexity_scores(temp_path.size(), 0.0);
+    if (params.complexity_enable_) {
+        // ... (이전과 동일한 '진동 지수' 계산 for 루프) ...
+        for (size_t i = 0; i < temp_path.size(); ++i) {
+            size_t target_idx = i;
+            double target_s = temp_path[i].s + params.complexity_check_distance_;
+            for (size_t j = i; j < temp_path.size(); ++j) {
+                if (temp_path[j].s >= target_s) { target_idx = j; break; }
+                if (j == temp_path.size() - 1) target_idx = j;
             }
+            if (target_idx <= i) continue;
+
+            double total_curvature_change = 0.0;
+            for (size_t j = i + 1; j <= target_idx; ++j) {
+                total_curvature_change += std::abs(temp_path[j].curvature - temp_path[j-1].curvature);
+            }
+            double score = total_curvature_change / params.complexity_vibration_max_;
+            raw_complexity_scores[i] = std::max(0.0, std::min(1.0, score));
         }
-        
-        // 곡률 기반 속도와 S자 코스 기반 속도 중 더 안전한(느린) 속도를 선택
-        temp_path[i].speed = std::min(curvature_speed, s_curve_speed);
     }
 
-    // 경로의 시작과 끝 지점 속도 처리
-    temp_path.front().speed = temp_path[1].speed;
-    temp_path.back().speed = temp_path[temp_path.size() - 2].speed;
+    // 2단계: '원시 복잡도 점수'를 스무딩 (기존과 동일)
+    std::vector<double> smoothed_complexity_scores = raw_complexity_scores;
+    if (params.complexity_enable_ && params.complexity_smoothing_window_ > 1) {
+        // ... (이전과 동일한 스무딩 for 루프) ...
+        int half_window = params.complexity_smoothing_window_ / 2;
+        for (size_t i = half_window; i < temp_path.size() - half_window; ++i) {
+            double sum = 0;
+            for (int j = -half_window; j <= half_window; ++j) {
+                sum += raw_complexity_scores[i + j];
+            }
+            smoothed_complexity_scores[i] = sum / params.complexity_smoothing_window_;
+        }
+    }
+
+    // 3단계 (신규): '이완 필터'를 적용하여 점수가 급락하는 것을 방지합니다.
+    std::vector<double> final_scores = smoothed_complexity_scores;
+    if (params.complexity_enable_) {
+        for (size_t i = 1; i < final_scores.size(); ++i) {
+            double max_decrease = params.complexity_score_decay_rate_;
+            // 현재 점수는 (이전 점수 - 감소율) 보다 항상 크거나 같아야 합니다.
+            final_scores[i] = std::max(final_scores[i], final_scores[i-1] - max_decrease);
+        }
+    }
+
+    // 4단계: 최종 필터링된 점수를 사용하여 속도를 '믹싱'합니다.
+    for (size_t i = 0; i < temp_path.size(); ++i) {
+        double high_speed = params.max_speed_ / (1.0 + params.curvature_gain_ * std::abs(temp_path[i].curvature));
+        double low_speed = params.complexity_low_speed_;
+        
+        double complexity_score = final_scores[i]; // 이완 필터가 적용된 최종 점수 사용
+        temp_path[i].speed = high_speed * (1.0 - complexity_score) + low_speed * complexity_score;
+        
+        temp_path[i].speed = std::max(params.min_speed_, std::min(temp_path[i].speed, params.max_speed_));
+    }
+    // ===================================[ 로직 끝 ]===================================
+
 
     // 5. Speed Smoothing (Moving Average Filter)
     std::vector<TrajectoryPoint> smoothed_path = temp_path;
@@ -2010,6 +2040,7 @@ FormulaAutonomousSystem::FormulaAutonomousSystem():
     state_machine_(nullptr),
     lateral_controller_(nullptr),
     longitudinal_controller_(nullptr),
+    smoothed_mapping_speed_(0.0),
     is_start_finish_line_defined_(false),
     just_crossed_line_(false),
     current_mode_(DrivingMode::MAPPING),
@@ -2250,7 +2281,12 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
         // === Linear Speed Control for MAPPING mode (Original SuBin logic) ===
         double base_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].speed;
         double steering_dampening = std::abs(steering_angle) * current_control_params.steering_based_speed_gain_;
-        final_target_speed = base_target_speed - steering_dampening;
+        double raw_target_speed = base_target_speed - steering_dampening;
+
+        // 저주파 통과 필터(Low-pass Filter) 적용
+        double alpha = current_control_params.speed_control_lpf_alpha_;
+        smoothed_mapping_speed_ = alpha * raw_target_speed + (1.0 - alpha) * smoothed_mapping_speed_;
+        final_target_speed = smoothed_mapping_speed_;
     }
 
     // 최종 목표 속도가 planning_params_의 최소 속도보다 낮아지지 않도록 제한
