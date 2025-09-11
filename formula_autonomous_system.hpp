@@ -1454,6 +1454,7 @@ struct ControlParams {
         double pid_ki_;
         double pid_kd_;
         double max_throttle_;
+        double max_brake_;
         double steering_based_speed_gain_;
     };
 
@@ -1488,6 +1489,7 @@ struct ControlParams {
         if(!pnh.getParam("/control/mapping_mode/SpeedControl/pid_ki", mapping_mode.pid_ki_)){std::cerr<<"Param control/mapping_mode/SpeedControl/pid_ki has error" << std::endl; return false;}
         if(!pnh.getParam("/control/mapping_mode/SpeedControl/pid_kd", mapping_mode.pid_kd_)){std::cerr<<"Param control/mapping_mode/SpeedControl/pid_kd has error" << std::endl; return false;}
         if(!pnh.getParam("/control/mapping_mode/SpeedControl/max_throttle", mapping_mode.max_throttle_)){std::cerr<<"Param control/mapping_mode/SpeedControl/max_throttle has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/mapping_mode/SpeedControl/max_brake", mapping_mode.max_brake_)){std::cerr<<"Param control/mapping_mode/SpeedControl/max_brake has error" << std::endl; return false;}
         if(!pnh.getParam("/control/mapping_mode/SpeedControl/steering_based_speed_gain", mapping_mode.steering_based_speed_gain_)){std::cerr<<"Param control/mapping_mode/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
 
         // ===================  Racing Mode Parameters ===================
@@ -1505,6 +1507,7 @@ struct ControlParams {
         if(!pnh.getParam("/control/racing_mode/SpeedControl/pid_ki", racing_mode.pid_ki_)){std::cerr<<"Param control/racing_mode/SpeedControl/pid_ki has error" << std::endl; return false;}
         if(!pnh.getParam("/control/racing_mode/SpeedControl/pid_kd", racing_mode.pid_kd_)){std::cerr<<"Param control/racing_mode/SpeedControl/pid_kd has error" << std::endl; return false;}
         if(!pnh.getParam("/control/racing_mode/SpeedControl/max_throttle", racing_mode.max_throttle_)){std::cerr<<"Param control/racing_mode/SpeedControl/max_throttle has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/SpeedControl/max_brake", racing_mode.max_brake_)){std::cerr<<"Param control/racing_mode/SpeedControl/max_brake has error" << std::endl; return false;}
         if(!pnh.getParam("/control/racing_mode/SpeedControl/steering_based_speed_gain", racing_mode.steering_based_speed_gain_)){std::cerr<<"Param control/racing_mode/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
 
         // =================== Vehicle Specification ===================
@@ -1919,7 +1922,7 @@ public:
      * @param max_output 최대 출력값
      * @return double 계산된 제어 출력값
      */
-    double calculate(double setpoint, double measured_value, double kp, double ki, double kd, double max_output);
+    double calculate(double setpoint, double measured_value, double kp, double ki, double kd, double min_output, double max_output);
 
     /**
      * @brief 제어기의 내부 상태(적분항, 이전 오차)를 초기화합니다.

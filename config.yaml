@@ -186,6 +186,7 @@ control:
       pid_ki: 0.0
       pid_kd: 0.01
       max_throttle: 0.4
+      max_brake: 0.4
       steering_based_speed_gain: 2.0
 
   # Parameters used during the RACING laps
@@ -204,6 +205,7 @@ control:
       pid_ki: 0.0
       pid_kd: 0.02
       max_throttle: 0.4
+      max_brake: 0.4
       steering_based_speed_gain: 4.5
 
   Vehicle:
