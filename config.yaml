@@ -152,11 +152,11 @@ planning:
     racing_mode:
       lookahead_distance: 15.0
       waypoint_spacing: 0.5
-      max_speed: 8.0
-      min_speed: 5.0
-      curvature_gain: 3.8
+      max_speed: 9.0
+      min_speed: 4.0
+      curvature_gain: 4.5
       curvature_threshold: 0.05
-      min_segment_length: 5.0
+      min_segment_length: 4.0
 
   behavioral_logic:
     # Lap Counting & Race Logic
@@ -186,7 +186,7 @@ control:
       pid_ki: 0.0
       pid_kd: 0.01
       max_throttle: 0.4
-      max_brake: 0.4
+      max_brake: 0.5
       steering_based_speed_gain: 2.0
 
   # Parameters used during the RACING laps
@@ -196,16 +196,16 @@ control:
       max_steer_angle: 1.0
 
     Stanley:
-      k_gain: 1.8
+      k_gain: 2.5
       k_gain_curvature_boost: 1.5
       alpha: 1.0
 
     SpeedControl:
-      pid_kp: 0.8
-      pid_ki: 0.0
-      pid_kd: 0.02
+      pid_kp: 0.7
+      pid_ki: 0.01
+      pid_kd: 0.05
       max_throttle: 0.4
-      max_brake: 0.4
+      max_brake: 0.5
       steering_based_speed_gain: 4.5
 
   Vehicle:
