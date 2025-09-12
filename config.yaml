@@ -168,7 +168,7 @@ planning:
 
   behavioral_logic:
     # Lap Counting & Race Logic
-    total_laps: 10
+    total_laps: 2
     finish_stop_distance: 1.0
 
 # ===========================================
@@ -194,6 +194,7 @@ control:
       pid_ki: 0.0
       pid_kd: 0.01
       max_throttle: 0.4
+      max_brake: 0.5
       steering_based_speed_gain: 2.0
 
   # Parameters used during the RACING laps
@@ -212,6 +213,7 @@ control:
       pid_ki: 0.0
       pid_kd: 0.03
       max_throttle: 0.4
+      max_brake: 0.5
       # steering_sensitivity: 10.0
       # speed_control_steering_lpf_alpha: 0.95
 

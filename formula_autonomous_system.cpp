@@ -1997,7 +1997,7 @@ PIDController::PIDController()
     : integral_error_(0.0), previous_error_(0.0), first_run_(true) {}
 
 // 함수 시그니처 변경 및 게인 값들을 인자로 직접 받아서 사용
-double PIDController::calculate(double setpoint, double measured_value, double kp, double ki, double kd, double max_output) {
+double PIDController::calculate(double setpoint, double measured_value, double kp, double ki, double kd, double min_output, double max_output) {
     auto current_time = std::chrono::steady_clock::now();
     
     // 첫 실행 시 dt가 비정상적으로 커지는 것을 방지
@@ -2013,7 +2013,7 @@ double PIDController::calculate(double setpoint, double measured_value, double k
     double dt = delta_time.count();
     
     if (dt <= 1e-6) {
-        return std::clamp(kp * (setpoint - measured_value), 0.0, max_output);
+        return std::clamp(kp * (setpoint - measured_value), min_output, max_output);
     }
 
     // 1. 비례(Proportional) 항 계산
@@ -2036,7 +2036,7 @@ double PIDController::calculate(double setpoint, double measured_value, double k
     last_time_ = current_time;
 
     // 출력값을 지정된 범위 내로 제한(clamping)
-    return std::clamp(output, 0.0, max_output);
+    return std::clamp(output, min_output, max_output);
 }
 
 void PIDController::reset() {
@@ -2283,6 +2283,7 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     // STEP 5: CONTROL - "How do I get there?"
     // =================================================================
     
+// Default control command(STOP)
     double final_steering = 0.0;
     double final_throttle = 0.0;
     double final_brake = 1.0;
@@ -2298,8 +2299,17 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
 
             const auto& control_params = control_params_->mapping_mode;
             final_steering = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_, control_params, control_params_->vehicle_length_);
-            final_throttle = longitudinal_controller_->calculate(1.0, vehicle_state.speed, control_params.pid_kp_, control_params.pid_ki_, control_params.pid_kd_, control_params.max_throttle_);
-            final_brake = 0.0;
+            
+            // Brake logic for FINISHED state
+            double control_effort = longitudinal_controller_->calculate(1.0, vehicle_state.speed, control_params.pid_kp_, control_params.pid_ki_, control_params.pid_kd_, -control_params.max_brake_, control_params.max_throttle_);
+            if (control_effort > 0.0) {
+                final_throttle = control_effort;
+                final_brake = 0.0;
+
+            } else {
+                final_throttle = 0.0;
+                final_brake = -control_effort; // control_effort is negative, so - makes it positive for brake command
+            }
 
         // Absolute STOP
         } else {
@@ -2318,21 +2328,31 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
                                          : control_params_->mapping_mode;
 
         final_steering = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_, control_params, control_params_->vehicle_length_);
-        
+
         double base_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].speed;
         double steering_dampening = std::abs(final_steering) * control_params.steering_based_speed_gain_;
         double final_target_speed = base_target_speed - steering_dampening;
         final_target_speed = std::max(planning_params.min_speed_, final_target_speed);
         
-        final_throttle = longitudinal_controller_->calculate(final_target_speed, vehicle_state.speed, control_params.pid_kp_, control_params.pid_ki_, control_params.pid_kd_, control_params.max_throttle_);
         
-        if (final_throttle > 0.0) {
+         double control_effort = longitudinal_controller_->calculate(
+            final_target_speed, 
+            vehicle_state.speed, 
+            control_params.pid_kp_, 
+            control_params.pid_ki_, 
+            control_params.pid_kd_, 
+            -control_params.max_brake_,    // min_output for PID
+            control_params.max_throttle_   // max_output for PID
+        );
+
+        if (control_effort > 0.0) {
+            final_throttle = control_effort;
             final_brake = 0.0;
 
         // 주행 중에는 급정지를 막기 위해 브레이크를 0으로 유지 (필요시 수정)
         } else {
-            final_brake = 0.0;
             final_throttle = 0.0;
+            final_brake = -control_effort; // control_effort is negative, so - makes it positive
         }
     }
 
