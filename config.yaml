@@ -29,7 +29,7 @@ perception:
   # DBSCAN clustering parameters
   lidar_clustering:
     dbscan_eps: 0.5
-    dbscan_min_points: 5
+    dbscan_min_points: 3
 
   # Cone geometric constraints
   lidar_cone_detection:
@@ -145,21 +145,21 @@ planning:
     mapping_mode:
       lookahead_distance: 3.0
       waypoint_spacing: 0.2
-      max_speed: 4.0
+      max_speed: 5.5
       lane_offset: 2.0
 
     # Parameters used during the RACING laps
     racing_mode:
       lookahead_distance: 15.0
-      waypoint_spacing: 0.5
-      max_speed: 9.0
-      min_speed: 5.0
-      curvature_gain: 3.8
+      waypoint_spacing: 0.25
+      max_speed: 10.5
+      min_speed: 4.0
+      curvature_gain: 4.0
 
       # complexity_logic 사용
       complexity_logic:
         enable: true
-        low_speed: 5.0          # 복잡 구간 최저 목표 속도
+        low_speed: 5.25          # 복잡 구간 최저 목표 속도
 
         check_distance: 15.0         # 몇 미터 구간의 진동을 확인할 것인가 (단위: m)
         vibration_max: 0.55           # 진동 지수가 이 값 이상이면 '복잡도 100%'로 간주
@@ -193,9 +193,9 @@ control:
       pid_kp: 0.3
       pid_ki: 0.0
       pid_kd: 0.01
-      max_throttle: 0.4
-      max_brake: 0.5
-      steering_based_speed_gain: 2.0
+      max_throttle: 1.0
+      max_brake: 1.0
+      steering_based_speed_gain: 5.0
 
   # Parameters used during the RACING laps
   racing_mode:
@@ -212,8 +212,8 @@ control:
       pid_kp: 0.5
       pid_ki: 0.0
       pid_kd: 0.03
-      max_throttle: 0.4
-      max_brake: 0.5
+      max_throttle: 1.0
+      max_brake: 1.0
       # steering_sensitivity: 10.0
       # speed_control_steering_lpf_alpha: 0.95
 
