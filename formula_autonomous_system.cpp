@@ -1385,7 +1385,7 @@ StateTransitionResult StateMachine::processEvent(ASEvent event) {
             }
             break;
 
-        // Finishing event
+            // Finishing event
         case ASEvent::RACE_FINISHED:
             if (current_state_ == ASState::AS_DRIVING) {
                 target_state = ASState::AS_FINISHED;
@@ -1475,10 +1475,6 @@ bool StateMachine::exitAS_OFF() { return true; }
 bool StateMachine::exitAS_READY() { return true; }
 bool StateMachine::exitAS_DRIVING() { return true; }
 bool StateMachine::exitAS_FINISHED() { return true; }
-<<<<<<< HEAD
-
-=======
->>>>>>> 2315d0d2c55c604791a3bc954c3173048097c3f7
 void StateMachine::injectSystemInit() {
     processEvent(ASEvent::SYSTEM_INIT);
 }
@@ -1769,31 +1765,108 @@ void FormulaAutonomousSystem::generateGlobalPath() {
     tk::spline spline_x, spline_y;
     spline_x.set_points(s_pts, x_pts);
     spline_y.set_points(s_pts, y_pts);
-
-    // 3. Sample points along the spline to calculate curvature and target speed for RACING mode.
+    // 3. [개선된 로직] Sample points and calculate speed with dynamic S-curve detection
     double total_length = s_pts.back();
-    const auto& params = planning_params_->trajectory_generation.racing_mode; // Use RACING parameters
-
-    for (double s = 0; s < total_length; s += 0.5) { // Sample every 0.5m
+    const auto& params = planning_params_->trajectory_generation.racing_mode;
+    std::vector<TrajectoryPoint> temp_path;
+    for (double s = 0; s < total_length; s += 0.5) {
         double x = spline_x(s);
         double y = spline_y(s);
-
-        // Calculate yaw and curvature accurately using 1st and 2nd derivatives
         double dx = spline_x.deriv(1, s);
         double dy = spline_y.deriv(1, s);
         double ddx = spline_x.deriv(2, s);
         double ddy = spline_y.deriv(2, s);
-        
         double yaw = std::atan2(dy, dx);
-        double curvature = std::abs(dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
-
-        // Plan speed based on curvature
-        double speed = params.max_speed_ / (1.0 + params.curvature_gain_ * curvature);
-        speed = std::max(params.min_speed_, std::min(speed, params.max_speed_));
-
-        // Store the complete TrajectoryPoint in the global_path_
-        global_path_.emplace_back(x, y, yaw, curvature, speed, s);
+        double curvature = (dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
+        ROS_INFO("Path Point s=%.2f, Curvature: %f", s, curvature);
+        temp_path.emplace_back(x, y, yaw, curvature, 0.0, s); // 속도는 나중에 계산
     }
+
+    if (temp_path.size() < 5) { // 스무딩을 위해 최소 5개 포인트 필요
+        ROS_WARN("Not enough points in temp_path to generate a reliable global path.");
+        return;
+    }
+
+// formula_autonomous_system.cpp
+
+    // ========================[ 최종 '이완 필터' 기반 로직 시작 ]========================
+
+    // 1단계: '원시 복잡도 점수' 계산 (기존과 동일)
+    std::vector<double> raw_complexity_scores(temp_path.size(), 0.0);
+    if (params.complexity_enable_) {
+        // ... (이전과 동일한 '진동 지수' 계산 for 루프) ...
+        for (size_t i = 0; i < temp_path.size(); ++i) {
+            size_t target_idx = i;
+            double target_s = temp_path[i].s + params.complexity_check_distance_;
+            for (size_t j = i; j < temp_path.size(); ++j) {
+                if (temp_path[j].s >= target_s) { target_idx = j; break; }
+                if (j == temp_path.size() - 1) target_idx = j;
+            }
+            if (target_idx <= i) continue;
+
+            double total_curvature_change = 0.0;
+            for (size_t j = i + 1; j <= target_idx; ++j) {
+                total_curvature_change += std::abs(temp_path[j].curvature - temp_path[j-1].curvature);
+            }
+            double score = total_curvature_change / params.complexity_vibration_max_;
+            raw_complexity_scores[i] = std::max(0.0, std::min(1.0, score));
+        }
+    }
+
+    // 2단계: '원시 복잡도 점수'를 스무딩 (기존과 동일)
+    std::vector<double> smoothed_complexity_scores = raw_complexity_scores;
+    if (params.complexity_enable_ && params.complexity_smoothing_window_ > 1) {
+        // ... (이전과 동일한 스무딩 for 루프) ...
+        int half_window = params.complexity_smoothing_window_ / 2;
+        for (size_t i = half_window; i < temp_path.size() - half_window; ++i) {
+            double sum = 0;
+            for (int j = -half_window; j <= half_window; ++j) {
+                sum += raw_complexity_scores[i + j];
+            }
+            smoothed_complexity_scores[i] = sum / params.complexity_smoothing_window_;
+        }
+    }
+
+    // 3단계 (신규): '이완 필터'를 적용하여 점수가 급락하는 것을 방지합니다.
+    std::vector<double> final_scores = smoothed_complexity_scores;
+    if (params.complexity_enable_) {
+        for (size_t i = 1; i < final_scores.size(); ++i) {
+            double max_decrease = params.complexity_score_decay_rate_;
+            // 현재 점수는 (이전 점수 - 감소율) 보다 항상 크거나 같아야 합니다.
+            final_scores[i] = std::max(final_scores[i], final_scores[i-1] - max_decrease);
+        }
+    }
+
+    // 4단계: 최종 필터링된 점수를 사용하여 속도를 '믹싱'합니다.
+    for (size_t i = 0; i < temp_path.size(); ++i) {
+        double high_speed = params.max_speed_ / (1.0 + params.curvature_gain_ * std::abs(temp_path[i].curvature));
+        double low_speed = params.complexity_low_speed_;
+        
+        double complexity_score = final_scores[i]; // 이완 필터가 적용된 최종 점수 사용
+        temp_path[i].speed = high_speed * (1.0 - complexity_score) + low_speed * complexity_score;
+        
+        temp_path[i].speed = std::max(params.min_speed_, std::min(temp_path[i].speed, params.max_speed_));
+    }
+    // ===================================[ 로직 끝 ]===================================
+
+
+    // 5. Speed Smoothing (Moving Average Filter)
+    std::vector<TrajectoryPoint> smoothed_path = temp_path;
+    int window_size = 5; // 5개 포인트(앞뒤 2개씩)의 평균을 사용
+    for (size_t i = window_size / 2; i < temp_path.size() - window_size / 2; ++i) {
+        double sum_speed = 0;
+        for (int j = -window_size / 2; j <= window_size / 2; ++j) {
+            sum_speed += temp_path[i + j].speed;
+        }
+        smoothed_path[i].speed = sum_speed / window_size;
+    }
+
+    // 6. 최종 속도를 min/max 범위 내로 제한하며 global_path_에 저장
+    for (const auto& point : smoothed_path) {
+        double final_speed = std::max(params.min_speed_, std::min(point.speed, params.max_speed_));
+        global_path_.emplace_back(point.position.x(), point.position.y(), point.yaw, point.curvature, final_speed, point.s);
+    }
+    
 }
 
 // ================================================================================================
@@ -1992,8 +2065,7 @@ FormulaAutonomousSystem::FormulaAutonomousSystem():
     is_global_path_generated_(false),
     current_lap_(0),
     is_race_finished_(false),
-    vehicle_position_relative_to_line_(0.0)
-    {
+    vehicle_position_relative_to_line_(0.0) {
         last_lap_time_ = ros::Time(0);
 }
 
@@ -2205,10 +2277,12 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
         }
     }
 
+
+
     // =================================================================
     // STEP 5: CONTROL - "How do I get there?"
     // =================================================================
-    // Default control command(STOP)
+    
     double final_steering = 0.0;
     double final_throttle = 0.0;
     double final_brake = 1.0;
