@@ -1365,9 +1365,14 @@ struct PlanningParams {
         double max_speed_;                  // Max speed (m/s)
         double min_speed_;                  // Minimum speed (m/s)
         double curvature_gain_;             // curvature gain for speed adjustment
-        double curvature_threshold_;        // threshold for determining critical section
-        double min_segment_length_;         // critical section length (m)
         double lane_offset_;                // Offset from single cone (m)
+
+        bool complexity_enable_;
+        double complexity_low_speed_;
+        double complexity_check_distance_;
+        double complexity_vibration_max_;
+        int complexity_smoothing_window_;
+        double complexity_score_decay_rate_;
     };
 
     struct TrajectoryGeneration {
@@ -1400,8 +1405,17 @@ struct PlanningParams {
         printf("  Max Speed: %.3f m/s\n", trajectory_generation.racing_mode.max_speed_);
         printf("  Min Speed: %.3f m/s\n", trajectory_generation.racing_mode.min_speed_);
         printf("  Curvature Gain: %.3f\n", trajectory_generation.racing_mode.curvature_gain_);
-        printf("  Curvature Threshold: %.3f\n", trajectory_generation.racing_mode.curvature_threshold_);
-        printf("  Min Segment Length: %.3f m\n", trajectory_generation.racing_mode.min_segment_length_);
+
+        if (trajectory_generation.racing_mode.complexity_enable_) {
+            printf("  [Complexity Logic Enabled]\n");
+            printf("    Low Speed: %.3f m/s\n", trajectory_generation.racing_mode.complexity_low_speed_);
+            printf("    Check Distance: %.3f m\n", trajectory_generation.racing_mode.complexity_check_distance_);
+            printf("    Vibration Max: %.3f\n", trajectory_generation.racing_mode.complexity_vibration_max_);
+            printf("    Smoothing Window: %d\n", trajectory_generation.racing_mode.complexity_smoothing_window_);
+            printf("    Score Decay Rate: %.3f\n", trajectory_generation.racing_mode.complexity_score_decay_rate_);
+        } else {
+            printf("  [Complexity Logic Disabled]\n");
+        }
 
         printf("\n[Behavioral Logic]\n");
         printf("  Total Laps: %d\n", behavioral_logic.total_laps_);
@@ -1424,8 +1438,12 @@ struct PlanningParams {
         if(!pnh.getParam("/planning/trajectory_generation/racing_mode/max_speed", trajectory_generation.racing_mode.max_speed_)){std::cerr<<"Param /planning/trajectory_generation/racing_mode/lookahead_distance" << std::endl; return false; }
         if(!pnh.getParam("/planning/trajectory_generation/racing_mode/min_speed", trajectory_generation.racing_mode.min_speed_)){std::cerr<<"Param /planning/trajectory_generation/racing_mode/lookahead_distance" << std::endl; return false; }
         if(!pnh.getParam("/planning/trajectory_generation/racing_mode/curvature_gain", trajectory_generation.racing_mode.curvature_gain_)){std::cerr<<"Param /planning/trajectory_generation/racing_mode/lookahead_distance" << std::endl; return false; }
-        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/curvature_threshold", trajectory_generation.racing_mode.curvature_threshold_)){std::cerr<<"Param /planning/trajectory_generation/racing_mode/curvature_threshold" << std::endl; return false; }
-        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/min_segment_length", trajectory_generation.racing_mode.min_segment_length_)){std::cerr<<"Param /planning/trajectory_generation/racing_mode/min_segment_length" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/enable", trajectory_generation.racing_mode.complexity_enable_)){std::cerr<<"Param error" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/low_speed", trajectory_generation.racing_mode.complexity_low_speed_)){std::cerr<<"Param error" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/check_distance", trajectory_generation.racing_mode.complexity_check_distance_)){std::cerr<<"Param error" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/vibration_max", trajectory_generation.racing_mode.complexity_vibration_max_)){std::cerr<<"Param error" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/smoothing_window", trajectory_generation.racing_mode.complexity_smoothing_window_)){std::cerr<<"Param error" << std::endl; return false; }
+        if(!pnh.getParam("/planning/trajectory_generation/racing_mode/complexity_logic/score_decay_rate", trajectory_generation.racing_mode.complexity_score_decay_rate_)){std::cerr<<"Param error" << std::endl; return false; }
 
         // Load Behavioral Logic parameters
         if(!pnh.getParam("/planning/behavioral_logic/total_laps", behavioral_logic.total_laps_)){std::cerr<<"Param /planning/behavioral_logic/total_laps" << std::endl; return false; }

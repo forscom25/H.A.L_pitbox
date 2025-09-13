@@ -58,19 +58,19 @@ perception:
     principal_point_x: 320.0
     principal_point_y: 240.0
 
-  # Camera 1 (Right) position relative to vehicle base (meters, degrees)
+  # Camera 1 (Left) position relative to vehicle base (meters, degrees)
   camera1_extrinsics:
     translation_x: -0.43
-    translation_y: -0.15
+    translation_y: 0.15
     translation_z: 0.82
     rotation_roll: 0.0
     rotation_pitch: 0.0
     rotation_yaw: 0.0
 
-  # Camera 2 (Left) position relative to vehicle base (meters, degrees)
+  # Camera 2 (Rightt) position relative to vehicle base (meters, degrees)
   camera2_extrinsics:
     translation_x: -0.43
-    translation_y: 0.15
+    translation_y: -0.15
     translation_z: 0.82
     rotation_roll: 0.0
     rotation_pitch: 0.0
@@ -145,18 +145,24 @@ planning:
     mapping_mode:
       lookahead_distance: 3.0
       waypoint_spacing: 0.2
-      max_speed: 4.5
+      max_speed: 5.5
       lane_offset: 2.0
 
     # Parameters used during the RACING laps
     racing_mode:
       lookahead_distance: 15.0
-      waypoint_spacing: 0.5
-      max_speed: 9.0
+      waypoint_spacing: 0.25
+      max_speed: 10.5
       min_speed: 4.0
-      curvature_gain: 4.5
-      curvature_threshold: 0.05
-      min_segment_length: 4.0
+      curvature_gain: 4.0
+
+      complexity_logic:
+        enable: true
+        low_speed: 5.25
+        check_distance: 15.0
+        vibration_max: 0.55
+        smoothing_window: 20
+        score_decay_rate: 0.07
 
   behavioral_logic:
     # Lap Counting & Race Logic
@@ -185,9 +191,9 @@ control:
       pid_kp: 0.3
       pid_ki: 0.0
       pid_kd: 0.01
-      max_throttle: 0.4
-      max_brake: 0.5
-      steering_based_speed_gain: 2.0
+      max_throttle: 1.0
+      max_brake: 1.0
+      steering_based_speed_gain: 5.0
 
   # Parameters used during the RACING laps
   racing_mode:
@@ -204,9 +210,9 @@ control:
       pid_kp: 0.7
       pid_ki: 0.01
       pid_kd: 0.05
-      max_throttle: 0.4
-      max_brake: 0.5
-      steering_based_speed_gain: 4.5
+      max_throttle: 1.0
+      max_brake: 1.0
+      steering_based_speed_gain: 2.0
 
   Vehicle:
     wheel_base: 1.55

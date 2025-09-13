@@ -1771,6 +1771,7 @@ void FormulaAutonomousSystem::generateGlobalPath() {
     // 3. Sample points along the spline to calculate curvature and target speed for RACING mode.
     double total_length = s_pts.back();
     const auto& params = planning_params_->trajectory_generation.racing_mode; // Use RACING parameters
+    std::vector<TrajectoryPoint> temp_path;
 
     for (double s = 0; s < total_length; s += 0.5) { // Sample every 0.5m
         double x = spline_x(s);
@@ -1781,69 +1782,91 @@ void FormulaAutonomousSystem::generateGlobalPath() {
         double dy = spline_y.deriv(1, s);
         double ddx = spline_x.deriv(2, s);
         double ddy = spline_y.deriv(2, s);
-        
         double yaw = std::atan2(dy, dx);
-        double curvature = std::abs(dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
 
-        // Plan speed based on curvature
-        double speed = params.max_speed_ / (1.0 + params.curvature_gain_ * curvature);
-        speed = std::max(params.min_speed_, std::min(speed, params.max_speed_));
-
-        // Store the complete TrajectoryPoint in the global_path_
-        global_path_.emplace_back(x, y, yaw, curvature, speed, s);
+        // S-curve detection(retain curvature sign)
+        double curvature = (dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
+        temp_path.emplace_back(x, y, yaw, curvature, 0.0, s); // 속도는 나중에 계산
     }
 
-    // speed profiling based on critical sections
-    // 1. Search critical sections
-    const double CURVATURE_THRESHOLD = params.curvature_threshold_;
-    const double MIN_SEGMENT_LENGTH = params.min_segment_length_;
+    if (temp_path.size() < 5) {
+        ROS_WARN("Not enough points in temp_path to generate a reliable global path.");
+        return;
+    }
 
-    critical_sections_.clear();
-    bool in_section = false;
-    size_t section_start_idx = 0;
+    // Speed profiling based on complexity
+    // 1. Calculate 'Complexity Score'
+    std::vector<double> raw_complexity_scores(temp_path.size(), 0.0);
+    if (params.complexity_enable_) {
+        for (size_t i = 0; i < temp_path.size(); ++i) {
+            size_t target_idx = i;
+            double target_s = temp_path[i].s + params.complexity_check_distance_;
+            for (size_t j = i; j < temp_path.size(); ++j) {
+                if (temp_path[j].s >= target_s) { target_idx = j; break; }
+                if (j == temp_path.size() - 1) target_idx = j;
+            }
+            if (target_idx <= i) continue;
 
-    for (size_t i = 0; i < global_path_.size(); ++i) {
-        // Entering critical section
-        if (global_path_[i].curvature > CURVATURE_THRESHOLD && !in_section) {
-            in_section = true;
-            section_start_idx = i;
+            double total_curvature_change = 0.0;
+            for (size_t j = i + 1; j <= target_idx; ++j) {
+                total_curvature_change += std::abs(temp_path[j].curvature - temp_path[j-1].curvature);
+            }
+            double score = total_curvature_change / params.complexity_vibration_max_;
+            raw_complexity_scores[i] = std::max(0.0, std::min(1.0, score));
+        }
+    }
 
-        // Exiting critical section
-        } else if (global_path_[i].curvature < CURVATURE_THRESHOLD && in_section) {
-            in_section = false;
-            double segment_length = global_path_[i].s - global_path_[section_start_idx].s;
-
-            // long enough to be a critical section
-            if (segment_length >= MIN_SEGMENT_LENGTH) {
-                critical_sections_.push_back({section_start_idx, i});
+    // 2. Smoothing score(Moving Average)
+    std::vector<double> smoothed_complexity_scores = raw_complexity_scores;
+    if (params.complexity_enable_ && params.complexity_smoothing_window_ > 1) {
+        int half_window = params.complexity_smoothing_window_ / 2;
+        if (temp_path.size() > params.complexity_smoothing_window_) {
+            for (size_t i = half_window; i < temp_path.size() - half_window; ++i) {
+                double sum = 0;
+                for (int j = -half_window; j <= half_window; ++j) {
+                    sum += raw_complexity_scores[i + j];
+                }
+                smoothed_complexity_scores[i] = sum / params.complexity_smoothing_window_;
             }
         }
     }
 
-    if (in_section) {
-        double segment_length = global_path_.back().s - global_path_[section_start_idx].s;
-        if (segment_length >= MIN_SEGMENT_LENGTH) {
-            critical_sections_.push_back({section_start_idx, global_path_.size() - 1});
+    // 3. Apply Relaxation Filter
+    std::vector<double> final_scores = smoothed_complexity_scores;
+    if (params.complexity_enable_) {
+        for (size_t i = 1; i < final_scores.size(); ++i) {
+            double max_decrease = params.complexity_score_decay_rate_;
+            final_scores[i] = std::max(final_scores[i], final_scores[i-1] - max_decrease);
         }
     }
 
-    // 2. Set minimum speed for each critical section
-    std::vector<double> section_min_speeds;
-    for (const auto& section : critical_sections_) {
-        double max_curvature_in_section = 0.0;
-        for (size_t i = section.first; i <= section.second; ++i) {
-            max_curvature_in_section = std::max(max_curvature_in_section, global_path_[i].curvature);
-        }
-        double min_speed = params.max_speed_ / (1.0 + params.curvature_gain_ * max_curvature_in_section);
-        section_min_speeds.push_back(std::max(params.min_speed_, min_speed));
+    // 4. Speed Blending
+    for (size_t i = 0; i < temp_path.size(); ++i) {
+        double high_speed = params.max_speed_ / (1.0 + params.curvature_gain_ * std::abs(temp_path[i].curvature));
+        double low_speed = params.complexity_low_speed_;
+        
+        double complexity_score = final_scores[i];
+        temp_path[i].speed = high_speed * (1.0 - complexity_score) + low_speed * complexity_score;
+        
+        temp_path[i].speed = std::max(params.min_speed_, std::min(temp_path[i].speed, params.max_speed_));
     }
 
-    // 3. Update target speed in critical section
-    for (size_t i = 0; i < critical_sections_.size(); ++i) {
-        for (size_t j = critical_sections_[i].first; j <= critical_sections_[i].second; ++j) {
-            global_path_[j].speed = section_min_speeds[i];
+    // 5. Final Moving Average Filter
+    std::vector<TrajectoryPoint> smoothed_path = temp_path;
+    int final_smoothing_window = 5;
+    if (temp_path.size() > final_smoothing_window) {
+        for (size_t i = final_smoothing_window / 2; i < temp_path.size() - final_smoothing_window / 2; ++i) {
+            double sum_speed = 0;
+            for (int j = -final_smoothing_window / 2; j <= final_smoothing_window / 2; ++j) {
+                sum_speed += temp_path[i + j].speed;
+            }
+            smoothed_path[i].speed = sum_speed / final_smoothing_window;
         }
     }
+
+    // 6. Update global_path
+    global_path_ = smoothed_path;
+    ROS_INFO("Complexity-based Global Path generated with %zu points.", global_path_.size());
 }
 
 // ================================================================================================
