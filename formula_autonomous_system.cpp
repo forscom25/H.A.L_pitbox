@@ -1356,6 +1356,10 @@ void StateMachine::initializeValidTransitions() {
     
     // AS_DRIVING transitions
     valid_transitions_[{ASState::AS_DRIVING, ASState::AS_OFF}] = true;
+    valid_transitions_[{ASState::AS_DRIVING, ASState::AS_FINISHED}] = true;
+
+    // AS_FINISHED transitions
+    valid_transitions_[{ASState::AS_FINISHED, ASState::AS_OFF}] = true;
 }
 
 bool StateMachine::isValidTransition(ASState from, ASState to) const {
@@ -1380,6 +1384,14 @@ StateTransitionResult StateMachine::processEvent(ASEvent event) {
                 mission_active_ = true;
             }
             break;
+
+        // Finishing event
+        case ASEvent::RACE_FINISHED:
+            if (current_state_ == ASState::AS_DRIVING) {
+                target_state = ASState::AS_FINISHED;
+            }
+            break;
+
         default:
             return StateTransitionResult(false, current_state_, current_state_, 
                                        "Unknown event: " + reason);
@@ -1453,10 +1465,17 @@ bool StateMachine::enterAS_DRIVING() {
     return true;
 }
 
+bool StateMachine::enterAS_FINISHED() {
+    std::cout << "StateMachine: Entering AS_FINISHED state" << std::endl;
+    mission_active_ = false; // Race finished, deactivate mission
+    return true;
+}
+
 // State exit functions
 bool StateMachine::exitAS_OFF() { return true; }
 bool StateMachine::exitAS_READY() { return true; }
 bool StateMachine::exitAS_DRIVING() { return true; }
+bool StateMachine::exitAS_FINISHED() { return true; }
 
 void StateMachine::injectSystemInit() {
     processEvent(ASEvent::SYSTEM_INIT);
@@ -1488,6 +1507,7 @@ std::string StateMachine::stateToString(ASState state) const {
         case ASState::AS_OFF: return "AS_OFF";
         case ASState::AS_READY: return "AS_READY";
         case ASState::AS_DRIVING: return "AS_DRIVING";
+        case ASState::AS_FINISHED: return "AS_FINISHED";
         default: return "UNKNOWN";
     }
 }
@@ -1497,6 +1517,7 @@ std::string StateMachine::eventToString(ASEvent event) const {
         case ASEvent::SYSTEM_INIT: return "SYSTEM_INIT";
         case ASEvent::SYSTEM_READY: return "SYSTEM_READY";
         case ASEvent::GO_SIGNAL: return "GO_SIGNAL";
+        case ASEvent::RACE_FINISHED: return "RACE_FINISHED";
         default: return "UNKNOWN_EVENT";
     }
 }
@@ -1748,9 +1769,11 @@ void FormulaAutonomousSystem::generateGlobalPath() {
     spline_y.set_points(s_pts, y_pts);
     // 3. [개선된 로직] Sample points and calculate speed with dynamic S-curve detection
     double total_length = s_pts.back();
-    const auto& params = planning_params_->trajectory_generation.racing_mode;
+
+    const auto& params = planning_params_->trajectory_generation.racing_mode; // Use RACING parameters
     std::vector<TrajectoryPoint> temp_path;
-    for (double s = 0; s < total_length; s += 0.5) {
+
+    for (double s = 0; s < total_length; s += 0.5) { // Sample every 0.5m
         double x = spline_x(s);
         double y = spline_y(s);
         double dx = spline_x.deriv(1, s);
@@ -1758,21 +1781,19 @@ void FormulaAutonomousSystem::generateGlobalPath() {
         double ddx = spline_x.deriv(2, s);
         double ddy = spline_y.deriv(2, s);
         double yaw = std::atan2(dy, dx);
+
+        // S-curve detection(retain curvature sign)
         double curvature = (dx * ddy - dy * ddx) / std::pow(dx * dx + dy * dy, 1.5);
-        ROS_INFO("Path Point s=%.2f, Curvature: %f", s, curvature);
         temp_path.emplace_back(x, y, yaw, curvature, 0.0, s); // 속도는 나중에 계산
     }
 
-    if (temp_path.size() < 5) { // 스무딩을 위해 최소 5개 포인트 필요
+    if (temp_path.size() < 5) {
         ROS_WARN("Not enough points in temp_path to generate a reliable global path.");
         return;
     }
 
-// ========================[ 새로운 2단계 속도 계산 로직 시작 ]========================
-
-    // ========================[ 최종 '속도 믹싱' 기반 로직 시작 ]========================
-
-    // 1단계: 각 지점의 '원시 복잡도 점수(0~1)'를 계산합니다.
+    // Speed profiling based on complexity
+    // 1. Calculate 'Complexity Score'
     std::vector<double> raw_complexity_scores(temp_path.size(), 0.0);
     if (params.complexity_enable_) {
         for (size_t i = 0; i < temp_path.size(); ++i) {
@@ -1788,57 +1809,62 @@ void FormulaAutonomousSystem::generateGlobalPath() {
             for (size_t j = i + 1; j <= target_idx; ++j) {
                 total_curvature_change += std::abs(temp_path[j].curvature - temp_path[j-1].curvature);
             }
-            // 진동 지수를 0~1 사이의 점수로 정규화합니다.
             double score = total_curvature_change / params.complexity_vibration_max_;
-            raw_complexity_scores[i] = std::max(0.0, std::min(1.0, score)); // 0~1 사이 값으로 제한
+            raw_complexity_scores[i] = std::max(0.0, std::min(1.0, score));
         }
     }
 
-    // 2단계: '원시 복잡도 점수'를 스무딩하여 부드러운 점수로 만듭니다.
+    // 2. Smoothing score(Moving Average)
     std::vector<double> smoothed_complexity_scores = raw_complexity_scores;
     if (params.complexity_enable_ && params.complexity_smoothing_window_ > 1) {
         int half_window = params.complexity_smoothing_window_ / 2;
-        for (size_t i = half_window; i < temp_path.size() - half_window; ++i) {
-            double sum = 0;
-            for (int j = -half_window; j <= half_window; ++j) {
-                sum += raw_complexity_scores[i + j];
+        if (temp_path.size() > params.complexity_smoothing_window_) {
+            for (size_t i = half_window; i < temp_path.size() - half_window; ++i) {
+                double sum = 0;
+                for (int j = -half_window; j <= half_window; ++j) {
+                    sum += raw_complexity_scores[i + j];
+                }
+                smoothed_complexity_scores[i] = sum / params.complexity_smoothing_window_;
             }
-            smoothed_complexity_scores[i] = sum / params.complexity_smoothing_window_;
         }
     }
 
-    // 3단계: 최종 스무딩된 점수를 사용하여 고속과 저속을 '믹싱'합니다.
+    // 3. Apply Relaxation Filter
+    std::vector<double> final_scores = smoothed_complexity_scores;
+    if (params.complexity_enable_) {
+        for (size_t i = 1; i < final_scores.size(); ++i) {
+            double max_decrease = params.complexity_score_decay_rate_;
+            final_scores[i] = std::max(final_scores[i], final_scores[i-1] - max_decrease);
+        }
+    }
+
+    // 4. Speed Blending
     for (size_t i = 0; i < temp_path.size(); ++i) {
-        double high_speed = params.max_speed_ / (1.0 + params.curvature_gain_ * temp_path[i].curvature);
+        double high_speed = params.max_speed_ / (1.0 + params.curvature_gain_ * std::abs(temp_path[i].curvature));
         double low_speed = params.complexity_low_speed_;
         
-        // 복잡도 점수(complexity_score)가 0이면 high_speed, 1이면 low_speed가 됩니다.
-        double complexity_score = smoothed_complexity_scores[i];
+        double complexity_score = final_scores[i];
         temp_path[i].speed = high_speed * (1.0 - complexity_score) + low_speed * complexity_score;
         
-        // 최종 속도를 min/max 범위 내로 제한
         temp_path[i].speed = std::max(params.min_speed_, std::min(temp_path[i].speed, params.max_speed_));
     }
-    // ===================================[ 로직 끝 ]===================================
 
-
-    // 5. Speed Smoothing (Moving Average Filter)
+    // 5. Final Moving Average Filter
     std::vector<TrajectoryPoint> smoothed_path = temp_path;
-    int window_size = 5; // 5개 포인트(앞뒤 2개씩)의 평균을 사용
-    for (size_t i = window_size / 2; i < temp_path.size() - window_size / 2; ++i) {
-        double sum_speed = 0;
-        for (int j = -window_size / 2; j <= window_size / 2; ++j) {
-            sum_speed += temp_path[i + j].speed;
+    int final_smoothing_window = 5;
+    if (temp_path.size() > final_smoothing_window) {
+        for (size_t i = final_smoothing_window / 2; i < temp_path.size() - final_smoothing_window / 2; ++i) {
+            double sum_speed = 0;
+            for (int j = -final_smoothing_window / 2; j <= final_smoothing_window / 2; ++j) {
+                sum_speed += temp_path[i + j].speed;
+            }
+            smoothed_path[i].speed = sum_speed / final_smoothing_window;
         }
-        smoothed_path[i].speed = sum_speed / window_size;
     }
 
-    // 6. 최종 속도를 min/max 범위 내로 제한하며 global_path_에 저장
-    for (const auto& point : smoothed_path) {
-        double final_speed = std::max(params.min_speed_, std::min(point.speed, params.max_speed_));
-        global_path_.emplace_back(point.position.x(), point.position.y(), point.yaw, point.curvature, final_speed, point.s);
-    }
-    
+    // 6. Update global_path
+    global_path_ = smoothed_path;
+    ROS_INFO("Complexity-based Global Path generated with %zu points.", global_path_.size());
 }
 
 // ================================================================================================
@@ -1969,7 +1995,7 @@ PIDController::PIDController()
     : integral_error_(0.0), previous_error_(0.0), first_run_(true) {}
 
 // 함수 시그니처 변경 및 게인 값들을 인자로 직접 받아서 사용
-double PIDController::calculate(double setpoint, double measured_value, double kp, double ki, double kd, double max_output) {
+double PIDController::calculate(double setpoint, double measured_value, double kp, double ki, double kd, double min_output, double max_output) {
     auto current_time = std::chrono::steady_clock::now();
     
     // 첫 실행 시 dt가 비정상적으로 커지는 것을 방지
@@ -1985,7 +2011,7 @@ double PIDController::calculate(double setpoint, double measured_value, double k
     double dt = delta_time.count();
     
     if (dt <= 1e-6) {
-        return std::clamp(kp * (setpoint - measured_value), 0.0, max_output);
+        return std::clamp(kp * (setpoint - measured_value), min_output, max_output);
     }
 
     // 1. 비례(Proportional) 항 계산
@@ -2008,7 +2034,7 @@ double PIDController::calculate(double setpoint, double measured_value, double k
     last_time_ = current_time;
 
     // 출력값을 지정된 범위 내로 제한(clamping)
-    return std::clamp(output, 0.0, max_output);
+    return std::clamp(output, min_output, max_output);
 }
 
 void PIDController::reset() {
@@ -2036,7 +2062,10 @@ FormulaAutonomousSystem::FormulaAutonomousSystem():
     current_mode_(DrivingMode::MAPPING),
     is_global_path_generated_(false),
     current_lap_(0),
-    vehicle_position_relative_to_line_(0.0) {
+    is_race_finished_(false),
+    vehicle_position_relative_to_line_(0.0)
+    {
+        last_lap_time_ = ros::Time(0);
 }
 
 FormulaAutonomousSystem::~FormulaAutonomousSystem(){
@@ -2187,7 +2216,7 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     // STEP 2: CHECK DRIVING CONDITIONS - "Can I drive?"
     // =================================================================
 
-    if (planning_state_ != ASState::AS_DRIVING) {
+    if (planning_state_ != ASState::AS_DRIVING && planning_state_ != ASState::AS_FINISHED) {
         control_command_msg.steering = 0.0;
         control_command_msg.throttle = 0.0;
         control_command_msg.brake = 1.0;
@@ -2228,72 +2257,104 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     // Behavior planning
     setRacingStrategy(vehicle_state, cones_for_planning);
 
-    // Select parameters based on the current driving mode
-    const auto& current_planning_params = (current_mode_ == DrivingMode::RACING) 
-                                          ? planning_params_->trajectory_generation.racing_mode 
-                                          : planning_params_->trajectory_generation.mapping_mode;
+    // Trajectory generation (Only if it's AS_DRIVING state)
+    if (planning_state_ == ASState::AS_DRIVING) {
 
-    // Generate trajectory based on the current driving mode
-    if (current_mode_ == DrivingMode::RACING && is_global_path_generated_) {
-        // In RACING mode, follow the pre-calculated global path
-        trajectory_points_ = trajectory_generator_->getTrajectoryFromGlobalPath(vehicle_state, global_path_, current_planning_params);
+        // Select parameters based on the current driving mode
+        const auto& current_planning_params = (current_mode_ == DrivingMode::RACING) 
+                                            ? planning_params_->trajectory_generation.racing_mode 
+                                            : planning_params_->trajectory_generation.mapping_mode;
 
-    } else {
-        // In MAPPING mode, generate a simple and stable path for mapping
-        trajectory_points_ = trajectory_generator_->generatePathFromClosestCones(cones_for_planning, current_planning_params);
+        // Generate trajectory based on the current driving mode
+        if (current_mode_ == DrivingMode::RACING && is_global_path_generated_) {
+            // In RACING mode, follow the pre-calculated global path
+            trajectory_points_ = trajectory_generator_->getTrajectoryFromGlobalPath(vehicle_state, global_path_, current_planning_params);
+
+        } else {
+            // In MAPPING mode, generate a simple and stable path for mapping
+            trajectory_points_ = trajectory_generator_->generatePathFromClosestCones(cones_for_planning, current_planning_params);
+        }
     }
 
 
     // =================================================================
     // STEP 5: CONTROL - "How do I get there?"
     // =================================================================
-    
-    double final_target_speed = 0.0;
+    // Default control command(STOP)
+    double final_steering = 0.0;
+    double final_throttle = 0.0;
+    double final_brake = 1.0;
 
-    // 1. Select parameters based on the current driving mode
-    const auto& current_control_params = (current_mode_ == DrivingMode::RACING)
+    // Choose control method depending on the vehicle's state
+    if (planning_state_ == ASState::AS_FINISHED) {
+        double distance_past_line = std::abs(vehicle_position_relative_to_line_);
+
+        // slow speed mode in finish stop distance
+        if (distance_past_line < planning_params_->behavioral_logic.finish_stop_distance_) {
+            trajectory_points_ = trajectory_generator_->generateStopTrajectory();
+            for(auto& point : trajectory_points_) { point.speed = 1.0; }
+
+            const auto& control_params = control_params_->mapping_mode;
+            final_steering = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_, control_params, control_params_->vehicle_length_);
+            
+            // Brake logic for FINISHED state
+            double control_effort = longitudinal_controller_->calculate(1.0, vehicle_state.speed, control_params.pid_kp_, control_params.pid_ki_, control_params.pid_kd_, -control_params.max_brake_, control_params.max_throttle_);
+            if (control_effort > 0.0) {
+                final_throttle = control_effort;
+                final_brake = 0.0;
+
+            } else {
+                final_throttle = 0.0;
+                final_brake = -control_effort; // control_effort is negative, so - makes it positive for brake command
+            }
+
+        // Absolute STOP
+        } else {
+            final_steering = 0.0;
+            final_throttle = 0.0;
+            final_brake = 1.0;
+        }
+
+    } else if (planning_state_ == ASState::AS_DRIVING) {
+        const auto& planning_params = (current_mode_ == DrivingMode::RACING)
+                                        ? planning_params_->trajectory_generation.racing_mode
+                                        : planning_params_->trajectory_generation.mapping_mode;
+
+        const auto& control_params = (current_mode_ == DrivingMode::RACING)
                                          ? control_params_->racing_mode
                                          : control_params_->mapping_mode;
 
-    // 2. Lateral Control
-    double steering_angle = lateral_controller_->calculateSteeringAngle(vehicle_state,
-                                                                        trajectory_points_,
-                                                                        current_control_params,
-                                                                        control_params_->vehicle_length_);
-
-    // 3. Longitudinal Control (Speed)
-    if (current_mode_ == DrivingMode::RACING) {
-        // === Curvature-based Speed Control for RACING mode ===
-        // Trajectory 생성 시 이미 곡률에 맞춰 계산된 목표 속도를 그대로 사용합니다.
-        final_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_.front().speed;
+        final_steering = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_, control_params, control_params_->vehicle_length_);
         
-    } else {
-        // === Linear Speed Control for MAPPING mode (Original SuBin logic) ===
         double base_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].speed;
-        double steering_dampening = std::abs(steering_angle) * current_control_params.steering_based_speed_gain_;
-        final_target_speed = base_target_speed - steering_dampening;
+        double steering_dampening = std::abs(final_steering) * control_params.steering_based_speed_gain_;
+        double final_target_speed = base_target_speed - steering_dampening;
+        final_target_speed = std::max(planning_params.min_speed_, final_target_speed);
+        
+        double control_effort = longitudinal_controller_->calculate(
+            final_target_speed, 
+            vehicle_state.speed, 
+            control_params.pid_kp_, 
+            control_params.pid_ki_, 
+            control_params.pid_kd_, 
+            -control_params.max_brake_,    // min_output for PID
+            control_params.max_throttle_   // max_output for PID
+        );
+
+        if (control_effort > 0.0) {
+            final_throttle = control_effort;
+            final_brake = 0.0;
+            
+        } else {
+            final_throttle = 0.0;
+            final_brake = -control_effort; // control_effort is negative, so - makes it positive
+        }
     }
 
-    // 최종 목표 속도가 planning_params_의 최소 속도보다 낮아지지 않도록 제한
-    final_target_speed = std::max(current_planning_params.min_speed_, final_target_speed);
-
-    // 4. Calculate Throttle using PID Controller
-    double throttle = longitudinal_controller_->calculate(final_target_speed,
-                                                          vehicle_state.speed,
-                                                          current_control_params.pid_kp_,
-                                                          current_control_params.pid_ki_,
-                                                          current_control_params.pid_kd_,
-                                                          current_control_params.max_throttle_);
-
-    // 5. Set final control commands
-    control_command_msg.steering = -steering_angle; // FSDS uses opposite steering convention
-    if (throttle > 0.0){
-        control_command_msg.throttle = throttle;
-        control_command_msg.brake = 0.0;
-    } else{
-        control_command_msg.throttle = 0.0;
-        control_command_msg.brake = 0.0; 
-    }
+    // 계산된 값을 최종적으로 제어 명령에 '할당' (한 곳에서만 처리)
+    control_command_msg.steering = -final_steering; // FSDS 좌표계에 맞게 음수(-) 적용
+    control_command_msg.throttle = final_throttle;
+    control_command_msg.brake = final_brake;
 
     // Debug
     static int count = 0;
@@ -2373,12 +2434,16 @@ std::vector<Cone> FormulaAutonomousSystem::getGlobalConeMap() const {
 void FormulaAutonomousSystem::setRacingStrategy(const VehicleState& vehicle_state, const std::vector<Cone>& cones_for_planning) {
     // 1. Define the start/finish line if it hasn't been defined yet.
     if (!is_start_finish_line_defined_) {
-        defineStartFinishLine(cones_for_planning);
+        defineStartFinishLine(vehicle_state, cones_for_planning);
     }
 
     // 2. Update the lap count if the line has been defined.
     if (is_start_finish_line_defined_) {
-        updateLapCount(vehicle_state);
+        updateVehiclePositionRelativeToLine(vehicle_state);
+
+        if (!is_race_finished_) {
+            updateLapCount(vehicle_state);
+        }
     }
     
     // 3. Switch driving mode and generate global path after lap 1.
@@ -2402,7 +2467,7 @@ void FormulaAutonomousSystem::setRacingStrategy(const VehicleState& vehicle_stat
 /**
  * @brief Defines the start/finish line using four orange cones.
  */
-void FormulaAutonomousSystem::defineStartFinishLine(const std::vector<Cone>& cones) {
+void FormulaAutonomousSystem::defineStartFinishLine(const VehicleState& vehicle_state, const std::vector<Cone>& cones) {
 
     std::vector<Eigen::Vector2d> orange_cones;
 
@@ -2424,19 +2489,29 @@ void FormulaAutonomousSystem::defineStartFinishLine(const std::vector<Cone>& con
     // The two cones with the largest y are left, the two with the smallest y are right.
     Eigen::Vector2d left_midpoint = (orange_cones[0] + orange_cones[1]) / 2.0;
     Eigen::Vector2d right_midpoint = (orange_cones[orange_cones.size()-1] + orange_cones[orange_cones.size()-2]) / 2.0;
+    Eigen::Vector2d local_center = (left_midpoint + right_midpoint) / 2.0;
+    Eigen::Vector2d local_direction = (left_midpoint - right_midpoint).normalized(); // The direction vector of the line goes from right to left.
 
-    // The center of the start line is the midpoint of the two midpoints.
-    start_finish_line_center_ = (left_midpoint + right_midpoint) / 2.0;
+    // Vehicle frame -> Global frame
+    double vehicle_x = vehicle_state.position.x();
+    double vehicle_y = vehicle_state.position.y();
+    double vehicle_yaw = vehicle_state.yaw;
 
-    // The direction vector of the line goes from right to left.
-    start_finish_line_direction_ = (left_midpoint - right_midpoint).normalized();
+    start_finish_line_center_.x() = vehicle_x + local_center.x() * std::cos(vehicle_yaw) - local_center.y() * std::sin(vehicle_yaw);
+    start_finish_line_center_.y() = vehicle_y + local_center.x() * std::sin(vehicle_yaw) + local_center.y() * std::cos(vehicle_yaw);
+
+    start_finish_line_direction_.x() = local_direction.x() * std::cos(vehicle_yaw) - local_direction.y() * std::sin(vehicle_yaw);
+    start_finish_line_direction_.y() = local_direction.x() * std::sin(vehicle_yaw) + local_direction.y() * std::cos(vehicle_yaw);
 
     // The yaw of the line is perpendicular to its direction.
     start_finish_line_yaw_ = std::atan2(start_finish_line_direction_.y(), start_finish_line_direction_.x()) - M_PI / 2.0;
+
     is_start_finish_line_defined_ = true;
     just_crossed_line_ = true; // IMPORTANT: Prevent counting the first pass right after starting.
     current_lap_ = 1;
-    ROS_INFO("FormulaAutonomousSystem: Start/Finish line defined at (%.2f, %.2f) with direction (%.2f, %.2f)",
+    last_lap_time_ = ros::Time::now();
+
+    ROS_INFO("FormulaAutonomousSystem: Start/Finish line defined at GLOBAL (%.2f, %.2f) with direction (%.2f, %.2f)",
              start_finish_line_center_.x(), start_finish_line_center_.y(),
              start_finish_line_direction_.x(), start_finish_line_direction_.y());
 }
@@ -2448,33 +2523,59 @@ void FormulaAutonomousSystem::updateLapCount(const VehicleState& current_state) 
 
     Eigen::Vector2d car_position_vec(current_state.position.x(), current_state.position.y());
 
-    // Vector from the line center to the car
-    Eigen::Vector2d vec_to_car = car_position_vec - start_finish_line_center_;
-    // Normal vector to the line (points in the direction of travel)
-    Eigen::Vector2d line_normal(-start_finish_line_direction_.y(), start_finish_line_direction_.x());
-
-    // Project the vector to the car onto the normal vector to find out which side of the line we are on.
-    double previous_position_relative = vehicle_position_relative_to_line_;
-    vehicle_position_relative_to_line_ = vec_to_car.dot(line_normal);
-
-    // Check for sign change (crossing the line)
-    // We crossed if the product of the previous and current relative positions is negative.
-    if (previous_position_relative > 0 && vehicle_position_relative_to_line_ <= 0) {
-
-        if (!just_crossed_line_) {
-            current_lap_++;
-            just_crossed_line_ = true; // Set flag to prevent double counting
-            ROS_INFO("================================================");
-            ROS_INFO("FormulaAutonomousSystem: Crossed line! New Lap: %d", current_lap_);
-            ROS_INFO("================================================");
-        }
-    }
+    // 1. Proximity Gate
+    double dist_from_line_center = (car_position_vec - start_finish_line_center_).norm();
+    const double PROXIMITY_GATE_RADIUS = 10.0;
 
     // Reset the 'just_crossed_line_' flag only when the car is far away from the line on the "after" side.
     // This prevents re-triggering if the car wiggles across the line.
-    double dist_from_line_center = (car_position_vec - start_finish_line_center_).norm();
-
-    if (just_crossed_line_ && dist_from_line_center > 10.0) { // 10m 이상 멀어지면 리셋
-        just_crossed_line_ = false;
+    if (dist_from_line_center > PROXIMITY_GATE_RADIUS) {
+        if (just_crossed_line_) {
+            just_crossed_line_ = false;
+        }
+        return; // Quit function
     }
+
+    // Check for sign change (crossing the line) using the continuously updated member variables
+    if (previous_position_relative_to_line_ < 0 && vehicle_position_relative_to_line_ >= 0) {
+
+        // Time filter
+        const double MINIMUM_LAP_TIME_SEC = 15.0; // Prevent double counting on wiggles
+        ros::Duration lap_duration = ros::Time::now() - last_lap_time_;
+
+        if (!just_crossed_line_ && lap_duration.toSec() > MINIMUM_LAP_TIME_SEC) {
+            current_lap_++;
+            just_crossed_line_ = true; // Set flag to prevent double counting
+            last_lap_time_ = ros::Time::now();
+
+            ROS_INFO("================================================");
+            ROS_INFO("FormulaAutonomousSystem: Crossed line! New Lap: %d", current_lap_);
+            ROS_INFO("================================================");
+
+            if (current_lap_ > planning_params_->behavioral_logic.total_laps_) {
+                ROS_INFO("================================================");
+                ROS_INFO("FormulaAutonomousSystem: Final lap complete! Finishing race...");
+                ROS_INFO("================================================");
+                is_race_finished_ = true;
+                state_machine_->processEvent(ASEvent::RACE_FINISHED);
+            }
+        }
+    }
+}
+
+void FormulaAutonomousSystem::updateVehiclePositionRelativeToLine(const VehicleState& current_state) {
+    Eigen::Vector2d car_position_vec(current_state.position.x(), current_state.position.y());
+    Eigen::Vector2d vec_to_car = car_position_vec - start_finish_line_center_;
+
+    // Dynamic Normal Vector for pass test
+    Eigen::Vector2d line_normal_candidate1(-start_finish_line_direction_.y(), start_finish_line_direction_.x());
+    Eigen::Vector2d line_normal_candidate2(start_finish_line_direction_.y(), -start_finish_line_direction_.x());
+
+    Eigen::Vector2d vehicle_heading_vec(std::cos(current_state.yaw), std::sin(current_state.yaw));
+    Eigen::Vector2d line_normal = (line_normal_candidate1.dot(vehicle_heading_vec) > line_normal_candidate2.dot(vehicle_heading_vec))
+                                    ? line_normal_candidate1 : line_normal_candidate2;
+
+    // Update previous and current relative positions
+    previous_position_relative_to_line_ = vehicle_position_relative_to_line_;
+    vehicle_position_relative_to_line_ = vec_to_car.dot(line_normal);
 }

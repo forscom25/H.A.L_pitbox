@@ -73,6 +73,7 @@ bool FormulaAutonomousSystemNode::init(){
     lane_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lane_marker", 1);
     global_path_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("/fsds/global_path", 1);                                // Globalpath
     trajectory_from_global_path_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("/fsds/trajectory_from_global_path", 1); // TrajectoryFromGlobalpath
+    critical_sections_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("/fsds/critical_sections_marker", 1); // critical section debugging
     
     // Get parameters
     pnh_.getParam("/system/main_loop_rate", main_loop_rate_);
@@ -152,6 +153,7 @@ void FormulaAutonomousSystemNode::publish(){
     publishStartFinishLineMarker();
     publishGlobalPathMarker();                  // Globalpath
     publishTrajectoryFromGlobalPathMarker();    // TrajectoryFromGlobalpath
+    publishCriticalSectionsMarker();            // CriticalSection
     return;
 }
 
@@ -611,7 +613,7 @@ void FormulaAutonomousSystemNode::publishStartFinishLineMarker() {
     text_marker.color.b = 0.0; // Green
     text_marker.color.a = 1.0;
 
-    int total_laps = 10;
+    int total_laps = 2;
     std::stringstream ss;
     ss << "Lap: " << formula_autonomous_system_->getCurrentLap() << " / " << total_laps;
     text_marker.text = ss.str();
@@ -706,6 +708,53 @@ void FormulaAutonomousSystemNode::publishTrajectoryFromGlobalPathMarker() {
     }
 
     trajectory_from_global_path_marker_pub_.publish(points_marker); 
+}
+
+void FormulaAutonomousSystemNode::publishCriticalSectionsMarker() {
+    if (!formula_autonomous_system_->isGlobalPathGenerated()) {
+        return;
+    }
+
+    auto global_path = formula_autonomous_system_->getGlobalPath();
+    auto critical_sections = formula_autonomous_system_->getCriticalSections();
+
+    if (global_path.empty() || critical_sections.empty()) {
+        return;
+    }
+
+    imu_msg_mutex_.lock();
+    std_msgs::Header header = imu_msg_.header;
+    imu_msg_mutex_.unlock();
+    header.frame_id = "map";
+
+    visualization_msgs::Marker sections_marker;
+    sections_marker.header = header;
+    sections_marker.ns = "critical_sections";
+    sections_marker.id = 0;
+    sections_marker.type = visualization_msgs::Marker::SPHERE_LIST;
+    sections_marker.action = visualization_msgs::Marker::ADD;
+    sections_marker.lifetime = ros::Duration(0.2);
+    sections_marker.pose.orientation.w = 1.0;
+    sections_marker.scale.x = 0.4; // Sphere diameter
+    sections_marker.scale.y = 0.4;
+    sections_marker.scale.z = 0.4;
+    sections_marker.color.r = 1.0; // Bright red
+    sections_marker.color.g = 0.0;
+    sections_marker.color.b = 0.0;
+    sections_marker.color.a = 1.0;
+
+    for (const auto& section : critical_sections) {
+        for (size_t i = section.first; i <= section.second; ++i) {
+            if (i < global_path.size()) {
+                geometry_msgs::Point p;
+                p.x = global_path[i].position.x();
+                p.y = global_path[i].position.y();
+                p.z = 0.2; // Elevate slightly to be visible over the path
+                sections_marker.points.push_back(p);
+            }
+        }
+    }
+    critical_sections_marker_pub_.publish(sections_marker);
 }
 
 int main(int argc, char** argv){

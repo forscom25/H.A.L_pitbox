@@ -140,6 +140,7 @@ public: // Function components
     void publishStartFinishLineMarker();
     void publishGlobalPathMarker();                  // Globalpath
     void publishTrajectoryFromGlobalPathMarker();    // TrajectoryFromGlobalpath
+    void publishCriticalSectionsMarker();            // CriticalSection
 
 // Variables
 private:
@@ -196,6 +197,7 @@ public: // ROS
     ros::Publisher lane_marker_pub_;
     ros::Publisher global_path_marker_pub_;                    // Globalpath
     ros::Publisher trajectory_from_global_path_marker_pub_;    // TrajectoryFromGlobalpath
+    ros::Publisher critical_sections_marker_pub_;              // CriticalSection
 
     // Output messages
     fs_msgs::ControlCommand control_command_msg_;
@@ -210,6 +212,5 @@ public: // ROS
     // FormulaAutonomousSystem
     std::unique_ptr<FormulaAutonomousSystem> formula_autonomous_system_;
 };
-
 
 #endif // FORMULA_AUTONOMOUS_SYSTEM_NODE_HPP
