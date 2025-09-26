@@ -2027,6 +2027,8 @@ private:
     bool just_crossed_line_;
     double vehicle_position_relative_to_line_;
 
+    ros::Time last_lap_time_;
+
     // Trajectory planning
     std::shared_ptr<PlanningParams> planning_params_;
     std::unique_ptr<TrajectoryGenerator> trajectory_generator_;
@@ -2044,6 +2046,8 @@ private:
 public:
     // Odometry & TF broadcasting
     std::unique_ptr<Localization> localization_;
+
+    std::vector<double> vehicle_state_;
 
     // PointCloud for visualization
     pcl::PointCloud<pcl::PointXYZ>::Ptr roi_point_cloud_;
