@@ -1738,13 +1738,13 @@ public:
 
     std::vector<Cone> updateAndGetPlannedCones(const VehicleState& current_state, const std::vector<Cone>& real_time_cones);
     std::vector<Cone> getGlobalConeMap() const;
-    void generateLanesFromMemory();
+    void generateLanesFromMemory(const Eigen::Vector2d& vehicle_pos);
     std::pair<std::vector<Eigen::Vector2d>, std::vector<Eigen::Vector2d>> getTrackLanes();
-    void refineConeMap();
+    void refineConeMap(const Eigen::Vector2d& vehicle_pos);
 
 private:
     // Function
-    std::vector<Eigen::Vector2d> sortConesByProximity(const std::vector<Eigen::Vector2d>& cones);
+    std::vector<Eigen::Vector2d> sortConesByProximity(const std::vector<Eigen::Vector2d>& cones, const Eigen::Vector2d& start_pos);
 
     /**
      * @brief Helper function to calculate the shortest distance between a point and a line segment.
