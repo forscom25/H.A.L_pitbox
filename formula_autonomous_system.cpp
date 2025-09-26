@@ -2105,6 +2105,7 @@ bool FormulaAutonomousSystem::init(ros::NodeHandle& pnh){
 
     // Localization
     localization_ = std::make_unique<Localization>(localization_params_);
+    vehicle_state_ = std::vector<double>(8, 0.0);
 
     // Mapping
     map_manager_ = std::make_unique<MapManager>(mapping_params_);
@@ -2195,9 +2196,8 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     localization_->updateImu(Eigen::Vector3d(acc.x(), acc.y(), gyro.z()), orientation, imu_msg.header.stamp.toSec());
     localization_->updateGps(Eigen::Vector2d(gps_msg.latitude, gps_msg.longitude), gps_msg.header.stamp.toSec());
 
-    auto current_pose = localization_->getCurrentPose(); 
-    auto current_velocity = localization_->getCurrentVelocity();
-    VehicleState vehicle_state(current_pose.x(), current_pose.y(), current_pose.z(), current_velocity);
+    vehicle_state_ = localization_->getCurrentState();
+    VehicleState vehicle_state(vehicle_state_[0], vehicle_state_[1], vehicle_state_[2], vehicle_state_[3]);
 
     // Update state machine with go signal
     state_machine_->injectSystemInit();

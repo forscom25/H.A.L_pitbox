@@ -214,7 +214,7 @@ void FormulaAutonomousSystemNode::publishVehicleOdom(){
     odom.header.frame_id = "map";
     odom.child_frame_id = header.frame_id;
 
-    auto state = formula_autonomous_system_->localization_->getCurrentState();
+    auto state = formula_autonomous_system_->vehicle_state_;
     odom.pose.pose.position.x = state[0];
     odom.pose.pose.position.y = state[1];
     odom.pose.pose.position.z = 0.0;
