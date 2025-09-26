@@ -1527,7 +1527,7 @@ struct ControlParams {
         if(!pnh.getParam("/control/racing_mode/SpeedControl/max_throttle", racing_mode.max_throttle_)){std::cerr<<"Param control/racing_mode/SpeedControl/max_throttle has error" << std::endl; return false;}
         if(!pnh.getParam("/control/racing_mode/SpeedControl/max_brake", racing_mode.max_brake_)){std::cerr<<"Param control/racing_mode/SpeedControl/max_brake has error" << std::endl; return false;}
         if(!pnh.getParam("/control/racing_mode/SpeedControl/steering_based_speed_gain", racing_mode.steering_based_speed_gain_)){std::cerr<<"Param control/racing_mode/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
-
+      
         // =================== Vehicle Specification ===================
         if(!pnh.getParam("/control/Vehicle/wheel_base", vehicle_length_)){std::cerr<<"Param control/Vehicle/wheel_base has error" << std::endl; return false;}
 
@@ -2063,6 +2063,8 @@ private:
     std::shared_ptr<ControlParams> control_params_;
     std::unique_ptr<LateralController> lateral_controller_;
     std::unique_ptr<PIDController> longitudinal_controller_;
+
+    //double smoothed_steering_angle_;
 
 public:
     // Odometry & TF broadcasting

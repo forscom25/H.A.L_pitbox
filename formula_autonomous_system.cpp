@@ -1767,17 +1767,15 @@ void FormulaAutonomousSystem::generateGlobalPath() {
     tk::spline spline_x, spline_y;
     spline_x.set_points(s_pts, x_pts);
     spline_y.set_points(s_pts, y_pts);
-
-    // 3. Sample points along the spline to calculate curvature and target speed for RACING mode.
+    // 3. [개선된 로직] Sample points and calculate speed with dynamic S-curve detection
     double total_length = s_pts.back();
+
     const auto& params = planning_params_->trajectory_generation.racing_mode; // Use RACING parameters
     std::vector<TrajectoryPoint> temp_path;
 
     for (double s = 0; s < total_length; s += 0.5) { // Sample every 0.5m
         double x = spline_x(s);
         double y = spline_y(s);
-
-        // Calculate yaw and curvature accurately using 1st and 2nd derivatives
         double dx = spline_x.deriv(1, s);
         double dy = spline_y.deriv(1, s);
         double ddx = spline_x.deriv(2, s);
@@ -2277,6 +2275,7 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
             trajectory_points_ = trajectory_generator_->generatePathFromClosestCones(cones_for_planning, current_planning_params);
         }
     }
+
 
     // =================================================================
     // STEP 5: CONTROL - "How do I get there?"
