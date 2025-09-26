@@ -2047,6 +2047,8 @@ FormulaAutonomousSystem::FormulaAutonomousSystem():
     is_global_path_generated_(false),
     current_lap_(0),
     vehicle_position_relative_to_line_(0.0) {
+                last_lap_time_ = ros::Time(0);
+                vehicle_state_ = std::vector<double>(8, 0.0);
 }
 
 FormulaAutonomousSystem::~FormulaAutonomousSystem(){
@@ -2175,6 +2177,8 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     getImuData(imu_msg, acc, gyro, orientation);
     localization_->updateImu(Eigen::Vector3d(acc.x(), acc.y(), gyro.z()), orientation, imu_msg.header.stamp.toSec());
     localization_->updateGps(Eigen::Vector2d(gps_msg.latitude, gps_msg.longitude), gps_msg.header.stamp.toSec());
+
+    vehicle_state_ = localization_->getCurrentState();
 
     auto current_pose = localization_->getCurrentPose(); 
     auto current_velocity = localization_->getCurrentVelocity();
