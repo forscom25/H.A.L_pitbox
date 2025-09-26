@@ -1036,7 +1036,7 @@ std::pair<std::vector<Eigen::Vector2d>, std::vector<Eigen::Vector2d>> MapManager
     return {left_lane_points_, right_lane_points_};
 }
 
-std::vector<Eigen::Vector2d> MapManager::sortConesByProximity(const std::vector<Eigen::Vector2d>& cones) {
+std::vector<Eigen::Vector2d> MapManager::sortConesByProximity(const std::vector<Eigen::Vector2d>& cones, const Eigen::Vector2d& start_pos) {
     if (cones.size() < 2) {
         return cones; // No sorting needed
     }
@@ -1050,9 +1050,8 @@ std::vector<Eigen::Vector2d> MapManager::sortConesByProximity(const std::vector<
     // Start sorting from the cone closest to the vehicle's origin (0,0),
     // which represents the "first" cone encountered.
     auto start_it = std::min_element(remaining_cones.begin(), remaining_cones.end(),
-        [](const Eigen::Vector2d& a, const Eigen::Vector2d& b) {
-            // squaredNorm() calculates the squared distance from the origin.
-            return a.squaredNorm() < b.squaredNorm();
+        [&start_pos](const Eigen::Vector2d& a, const Eigen::Vector2d& b) {
+            return (a - start_pos).squaredNorm() < (b - start_pos).squaredNorm(); // 원점 대신 start_pos 기준으로 변경
         });
 
     sorted_cones.push_back(*start_it);
@@ -1132,7 +1131,7 @@ std::vector<Eigen::Vector2d> MapManager::sortConesByProximity(const std::vector<
     return sorted_cones;
 }
 
-void MapManager::generateLanesFromMemory() {
+void MapManager::generateLanesFromMemory(const Eigen::Vector2d& vehicle_pos) {
 
     std::lock_guard<std::mutex> lock(cone_memory_mutex_);
     std::vector<Eigen::Vector2d> blue_cones, yellow_cones;
@@ -1146,8 +1145,8 @@ void MapManager::generateLanesFromMemory() {
     }
 
     // Sort cones by proximity
-    auto sorted_blue = sortConesByProximity(blue_cones);
-    auto sorted_yellow = sortConesByProximity(yellow_cones);
+    auto sorted_blue = sortConesByProximity(blue_cones, vehicle_pos);
+    auto sorted_yellow = sortConesByProximity(yellow_cones, vehicle_pos);
 
     // To create a closed loop, check if the last and first cones are close enough to connect.
     if (sorted_blue.size() > 2) {
@@ -1244,11 +1243,11 @@ void MapManager::generateLanesFromMemory() {
  * 4. Replaces the old map with the refined map.
  */
 
-void MapManager::refineConeMap() {
+void MapManager::refineConeMap(const Eigen::Vector2d& vehicle_pos) {
     std::lock_guard<std::mutex> lock(cone_memory_mutex_);
 
     // 1. Generate temporary lanes from current map (guideline)
-    generateLanesFromMemory();
+    generateLanesFromMemory(vehicle_pos);
 
     // Check sufficiency
     if (left_lane_points_.size() < 2 && right_lane_points_.size() < 2) {
@@ -1704,6 +1703,14 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateStopTrajectory()
 
 void FormulaAutonomousSystem::generateGlobalPath() {
     global_path_.clear();
+
+        // 이 함수가 호출되는 시점의 차량 위치를 가져옵니다.
+    // vehicle_state_는 run() 함수에서 지속적으로 업데이트됩니다.
+    Eigen::Vector2d current_vehicle_pos(vehicle_state_[0], vehicle_state_[1]);
+
+    // getTrackLanes() 전에 generateLanesFromMemory를 먼저 호출해야 합니다.
+    // getTrackLanes()는 이미 생성된 lane point를 반환하기만 합니다.
+    map_manager_->generateLanesFromMemory(current_vehicle_pos);
 
     auto track_lanes = map_manager_->getTrackLanes();
     const auto& left_lane = track_lanes.first;
@@ -2237,7 +2244,7 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
 
     // Update global cone map
     std::vector<Cone> cones_for_planning = map_manager_->updateAndGetPlannedCones(vehicle_state, cones_);
-    map_manager_->generateLanesFromMemory();
+    map_manager_->generateLanesFromMemory(vehicle_state.position);
 
     // Behavior planning
     setRacingStrategy(vehicle_state, cones_for_planning);
