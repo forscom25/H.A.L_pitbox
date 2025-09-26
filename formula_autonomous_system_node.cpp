@@ -68,7 +68,6 @@ bool FormulaAutonomousSystemNode::init(){
     detected_cones_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/detected_cones_marker", 1);
     projected_cones_image_pub_ = nh_.advertise<sensor_msgs::Image>("/fsds/projected_cones_image", 1);
     center_line_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/center_line_marker", 1);
-    lap_count_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lap_count_marker", 1);
     global_cones_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/global_cones_marker", 1);
     lane_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/fsds/lane_marker", 1);
     global_path_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("/fsds/global_path", 1);                                // Globalpath
@@ -212,7 +211,7 @@ void FormulaAutonomousSystemNode::publishVehicleOdom(){
     odom.header.frame_id = "map";
     odom.child_frame_id = header.frame_id;
 
-    auto state = formula_autonomous_system_->localization_->getCurrentState();
+    auto state = formula_autonomous_system_->vehicle_state_;
     odom.pose.pose.position.x = state[0];
     odom.pose.pose.position.y = state[1];
     odom.pose.pose.position.z = 0.0;
@@ -616,7 +615,6 @@ void FormulaAutonomousSystemNode::publishStartFinishLineMarker() {
     ss << "Lap: " << formula_autonomous_system_->getCurrentLap() << " / " << total_laps;
     text_marker.text = ss.str();
     marker_array.markers.push_back(text_marker);
-    lap_count_marker_pub_.publish(marker_array);
 }
 
 // Globalpath
