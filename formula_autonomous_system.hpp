@@ -2067,6 +2067,7 @@ private:
 public:
     // Odometry & TF broadcasting
     std::unique_ptr<Localization> localization_;
+    std::vector<double> vehicle_state_;
 
     // PointCloud for visualization
     pcl::PointCloud<pcl::PointXYZ>::Ptr roi_point_cloud_;
