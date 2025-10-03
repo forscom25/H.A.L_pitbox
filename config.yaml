@@ -143,22 +143,22 @@ planning:
   trajectory_generation:
     # Parameters used during the MAPPING lap
     mapping_mode:
-      lookahead_distance: 3.0
+      lookahead_distance: 2.0
       waypoint_spacing: 0.2
       max_speed: 5.5
-      lane_offset: 2.0
+      lane_offset: 1.5
 
     # Parameters used during the RACING laps
     racing_mode:
       lookahead_distance: 15.0
       waypoint_spacing: 0.25
-      max_speed: 10.5
-      min_speed: 4.0
-      curvature_gain: 4.0
+      max_speed: 9.0
+      min_speed: 5.5
+      curvature_gain: 6.0
 
       complexity_logic:
         enable: true
-        low_speed: 5.25
+        low_speed: 5.5
         check_distance: 15.0
         vibration_max: 0.55
         smoothing_window: 20
@@ -202,12 +202,12 @@ control:
       max_steer_angle: 1.0
 
     Stanley:
-      k_gain: 2.5
-      k_gain_curvature_boost: 1.5
+      k_gain: 2.7
+      k_gain_curvature_boost: 1.8
       alpha: 1.0
 
     SpeedControl:
-      pid_kp: 0.7
+      pid_kp: 0.6
       pid_ki: 0.01
       pid_kd: 0.05
       max_throttle: 1.0
