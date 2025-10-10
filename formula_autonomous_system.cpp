@@ -1851,6 +1851,9 @@ void FormulaAutonomousSystem::generateGlobalPath() {
         double low_speed = params.complexity_low_speed_;
         
         double complexity_score = final_scores[i];
+
+        temp_path[i].complexity_score = complexity_score;
+        
         temp_path[i].speed = high_speed * (1.0 - complexity_score) + low_speed * complexity_score;
         
         temp_path[i].speed = std::max(params.min_speed_, std::min(temp_path[i].speed, params.max_speed_));
@@ -2333,9 +2336,7 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
 
         final_steering = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_, control_params, control_params_->vehicle_length_);
         
-        double base_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].speed;
-        double current_complexity = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].complexity_score;
-        
+        double base_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].speed;        
         double steering_dampening = std::abs(final_steering) * control_params.steering_based_speed_gain_;
         double final_target_speed = base_target_speed - steering_dampening;
         final_target_speed = std::max(planning_params.min_speed_, final_target_speed);
@@ -2349,6 +2350,8 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
             -control_params.max_brake_,    // min_output for PID
             control_params.max_throttle_   // max_output for PID
         );
+
+        double current_complexity = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].complexity_score;
 
         if (control_effort > 0.0) {
             final_throttle = control_effort;
@@ -2364,6 +2367,11 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
                 final_brake = 0.0;
             }
         }
+
+        ROS_INFO_THROTTLE(1.0, "[DEBUG] Complexity: %.2f | Brake Threshold: %.2f | Final Brake: %.2f",
+                          current_complexity,
+                          control_params.brake_activation_complexity_threshold_,
+                          final_brake);
     }
 
     // 계산된 값을 최종적으로 제어 명령에 '할당' (한 곳에서만 처리)
