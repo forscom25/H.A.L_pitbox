@@ -1031,11 +1031,12 @@ struct TrajectoryPoint {
     double curvature;           // path curvature (1/radius)
     double speed;               // target speed (m/s)
     double s;                   // arc length from start
+    double complexity_score;    // complexity score for the trajectory point (0.0 ~ 1.0)
     
     // initialize with default values
     TrajectoryPoint(double x = 0.0, double y = 0.0, double yaw_val = 0.0, 
-                   double curv = 0.0, double spd = 0.0, double s_val = 0.0)
-        : position(x, y), yaw(yaw_val), curvature(curv), speed(spd), s(s_val) {}
+                   double curv = 0.0, double spd = 0.0, double s_val = 0.0,  double complexity = 0.0)
+        : position(x, y), yaw(yaw_val), curvature(curv), speed(spd), s(s_val), complexity_score(complexity) {}
 };
 
 // Autonomous System States according to Formula Student rules
@@ -1474,6 +1475,7 @@ struct ControlParams {
         double max_throttle_;
         double max_brake_;
         double steering_based_speed_gain_;
+        double brake_activation_complexity_threshold_;
     };
 
     // ===================  Controller Selection ===================
@@ -1527,6 +1529,7 @@ struct ControlParams {
         if(!pnh.getParam("/control/racing_mode/SpeedControl/max_throttle", racing_mode.max_throttle_)){std::cerr<<"Param control/racing_mode/SpeedControl/max_throttle has error" << std::endl; return false;}
         if(!pnh.getParam("/control/racing_mode/SpeedControl/max_brake", racing_mode.max_brake_)){std::cerr<<"Param control/racing_mode/SpeedControl/max_brake has error" << std::endl; return false;}
         if(!pnh.getParam("/control/racing_mode/SpeedControl/steering_based_speed_gain", racing_mode.steering_based_speed_gain_)){std::cerr<<"Param control/racing_mode/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/SpeedControl/brake_activation_complexity_threshold", racing_mode.brake_activation_complexity_threshold_)){std::cerr<<"Param control/racing_mode/SpeedControl/brake_activation_complexity_threshold has error" << std::endl; return false;}
       
         // =================== Vehicle Specification ===================
         if(!pnh.getParam("/control/Vehicle/wheel_base", vehicle_length_)){std::cerr<<"Param control/Vehicle/wheel_base has error" << std::endl; return false;}
