@@ -1595,7 +1595,7 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generatePathFromClosestCones(c
         // If a cone is found, aim for the target_y; otherwise, go straight (y=0)
         double y = target_found ? (x / params.lookahead_distance_) * target_y : 0.0;
         
-        last_trajectory_.emplace_back(x, y, 0.0, 0.0, params.max_speed_, x);
+        last_trajectory_.emplace_back(x, y, 0.0, 0.0, params.max_speed_, x, 0.0);
     }
     
     // Calculate the yaw for the path (simply the angle between two points)
@@ -1660,7 +1660,7 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::getTrajectoryFromGlobalPath(co
         while (yaw_local < -M_PI) yaw_local += 2.0 * M_PI;
 
         // Add the transformed point with pre-calculated data to the local trajectory
-        last_trajectory_.emplace_back(x_local, y_local, yaw_local, global_point.curvature, global_point.speed, global_point.s);
+        last_trajectory_.emplace_back(x_local, y_local, yaw_local, global_point.curvature, global_point.speed, global_point.s, global_point.complexity_score);
         last_local_path_points_.emplace_back(x_local, y_local); // For visualization
     }
 
@@ -1718,7 +1718,7 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateStopTrajectory()
     int num_points = static_cast<int>(params.lookahead_distance_ / params.waypoint_spacing_);
     for (int i = 0; i < num_points; ++i) {
         double x = i * params.waypoint_spacing_;
-        last_trajectory_.emplace_back(x, 0.0, 0.0, 0.0, 0.0, x);
+        last_trajectory_.emplace_back(x, 0.0, 0.0, 0.0, 0.0, x, 0.0);
     }
     return last_trajectory_;
 }
@@ -2334,6 +2334,8 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
         final_steering = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_, control_params, control_params_->vehicle_length_);
         
         double base_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].speed;
+        double current_complexity = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].complexity_score;
+        
         double steering_dampening = std::abs(final_steering) * control_params.steering_based_speed_gain_;
         double final_target_speed = base_target_speed - steering_dampening;
         final_target_speed = std::max(planning_params.min_speed_, final_target_speed);
@@ -2353,8 +2355,14 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
             final_brake = 0.0;
             
         } else {
-            final_throttle = 0.0;
-            final_brake = -control_effort; // control_effort is negative, so - makes it positive
+            // check complexity score to decide braking strategy
+            if (current_complexity > control_params.brake_activation_complexity_threshold_) { // brake required
+                final_throttle = 0.0;
+                final_brake = -control_effort; // control_effort is negative, so - makes it positive
+            } else { // break not required
+                final_throttle = 0.0;
+                final_brake = 0.0;
+            }
         }
     }
 

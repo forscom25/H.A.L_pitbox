@@ -150,15 +150,15 @@ planning:
 
     # Parameters used during the RACING laps
     racing_mode:
-      lookahead_distance: 15.0
+      lookahead_distance: 8.0
       waypoint_spacing: 0.25
-      max_speed: 9.0
-      min_speed: 5.5
+      max_speed: 12.0
+      min_speed: 6.0
       curvature_gain: 6.0
 
       complexity_logic:
         enable: true
-        low_speed: 5.5
+        low_speed: 6.0
         check_distance: 15.0
         vibration_max: 0.55
         smoothing_window: 20
@@ -207,12 +207,13 @@ control:
       alpha: 1.0
 
     SpeedControl:
-      pid_kp: 0.6
+      pid_kp: 0.5
       pid_ki: 0.01
       pid_kd: 0.05
       max_throttle: 1.0
       max_brake: 1.0
       steering_based_speed_gain: 2.0
+      brake_activation_complexity_threshold: 0.6
 
   Vehicle:
     wheel_base: 1.55
