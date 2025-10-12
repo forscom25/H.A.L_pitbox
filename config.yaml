@@ -15,7 +15,7 @@ perception:
   # LiDAR ROI extraction parameters
   lidar_roi_extraction:
     x_min: 0.0
-    x_max: 50.0
+    x_max: 60.0
     y_min: -30.0
     y_max: 30.0
     z_min: -10.0
@@ -28,8 +28,8 @@ perception:
 
   # DBSCAN clustering parameters
   lidar_clustering:
-    dbscan_eps: 0.5
-    dbscan_min_points: 2
+    dbscan_eps: 0.6
+    dbscan_min_points: 4
 
   # Cone geometric constraints
   lidar_cone_detection:
@@ -37,7 +37,7 @@ perception:
     cone_max_height: 0.5
     cone_min_radius: 0.00
     cone_max_radius: 0.7
-    cone_min_points: 1
+    cone_min_points: 2
 
   # LiDAR position relative to vehicle base (meters, degrees)
   lidar_extrinsics:
@@ -67,7 +67,7 @@ perception:
     rotation_pitch: 0.0
     rotation_yaw: 0.0
 
-  # Camera 2 (Right) position relative to vehicle base (meters, degrees)
+  # Camera 2 (Rightt) position relative to vehicle base (meters, degrees)
   camera2_extrinsics:
     translation_x: -0.43
     translation_y: -0.15
@@ -143,32 +143,33 @@ planning:
   trajectory_generation:
     # Parameters used during the MAPPING lap
     mapping_mode:
-      lookahead_distance: 3.0
+      lookahead_distance: 2.0
       waypoint_spacing: 0.2
       max_speed: 4.0
-      lane_offset: 2.0
+      lane_offset: 1.5
 
     # Parameters used during the RACING laps
     racing_mode:
-      lookahead_distance: 15.0
-      waypoint_spacing: 0.5
-      max_speed: 9.0
-      min_speed: 5.0
-      curvature_gain: 3.8
-
-      # complexity_logic 사용
+      lookahead_distance: 8.0
+      waypoint_spacing: 0.25
+      max_speed: 8.0
+      min_speed: 6.0
+      curvature_gain: 6.0
+      curvature_offset_gain: 10.0        # 곡률에 따른 횡방향 오프셋 민감도 (클수록 코너 안쪽으로 깊이 이동)
+      max_lane_width_est: 4.0           # 최대 트랙 폭 추정치 (m, 안전을 위한 오프셋 제한에 사용)
+      max_offset_ratio: 0.4             # 최대 오프셋 비율 (max_lane_width_est * 이 값으로 제한)
       complexity_logic:
         enable: true
-        low_speed: 5.0          # 복잡 구간 최저 목표 속도
-
-        check_distance: 15.0         # 몇 미터 구간의 진동을 확인할 것인가 (단위: m)
-        vibration_max: 0.55           # 진동 지수가 이 값 이상이면 '복잡도 100%'로 간주
-        smoothing_window: 20        # 복잡도 점수를 부드럽게 만들기 위한 스무딩 창 크기
-        score_decay_rate: 0.07 # <-- 이 라인을 추가 (값이 작을수록 매우 천천히 하락)
+        low_speed: 7.0
+        check_distance: 15.0
+        vibration_max: 0.45
+        smoothing_window: 20
+        score_decay_rate: 0.05
 
   behavioral_logic:
     # Lap Counting & Race Logic
-    total_laps: 10
+    total_laps: 2
+    finish_stop_distance: 1.0
 
 # ===========================================
 # Control Parameters
@@ -189,12 +190,12 @@ control:
       alpha: 1.0
 
     SpeedControl:
-      pid_kp: 0.3
+      pid_kp: 0.6
       pid_ki: 0.0
       pid_kd: 0.01
-      max_throttle: 0.4
-      steering_based_speed_gain: 2.0
-      speed_control_lpf_alpha: 0.5
+      max_throttle: 1.0
+      max_brake: 1.0
+      steering_based_speed_gain: 5.0
 
   # Parameters used during the RACING laps
   racing_mode:
@@ -203,17 +204,18 @@ control:
       max_steer_angle: 1.0
 
     Stanley:
-      k_gain: 2.5
-      k_gain_curvature_boost: 1.6
+      k_gain: 2.7
+      k_gain_curvature_boost: 1.8
       alpha: 1.0
 
     SpeedControl:
       pid_kp: 0.5
-      pid_ki: 0.0
-      pid_kd: 0.03
-      max_throttle: 0.4
-      # steering_sensitivity: 10.0
-      # speed_control_steering_lpf_alpha: 0.95
+      pid_ki: 0.01
+      pid_kd: 0.05
+      max_throttle: 1.0
+      max_brake: 1.0
+      steering_based_speed_gain: 2.0
+      brake_activation_complexity_threshold: 0.5
 
   Vehicle:
     wheel_base: 1.55
