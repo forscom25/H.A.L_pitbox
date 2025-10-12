@@ -15,7 +15,7 @@ perception:
   # LiDAR ROI extraction parameters
   lidar_roi_extraction:
     x_min: 0.0
-    x_max: 50.0
+    x_max: 60.0
     y_min: -30.0
     y_max: 30.0
     z_min: -10.0
@@ -28,8 +28,8 @@ perception:
 
   # DBSCAN clustering parameters
   lidar_clustering:
-    dbscan_eps: 0.5
-    dbscan_min_points: 5
+    dbscan_eps: 0.6
+    dbscan_min_points: 4
 
   # Cone geometric constraints
   lidar_cone_detection:
@@ -37,7 +37,7 @@ perception:
     cone_max_height: 0.5
     cone_min_radius: 0.00
     cone_max_radius: 0.7
-    cone_min_points: 3
+    cone_min_points: 2
 
   # LiDAR position relative to vehicle base (meters, degrees)
   lidar_extrinsics:
