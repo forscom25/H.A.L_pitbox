@@ -15,7 +15,7 @@ perception:
   # LiDAR ROI extraction parameters
   lidar_roi_extraction:
     x_min: 0.0
-    x_max: 70.0
+    x_max: 50.0
     y_min: -30.0
     y_max: 30.0
     z_min: -10.0
@@ -28,8 +28,8 @@ perception:
 
   # DBSCAN clustering parameters
   lidar_clustering:
-    dbscan_eps: 0.7
-    dbscan_min_points: 2
+    dbscan_eps: 0.5
+    dbscan_min_points: 5
 
   # Cone geometric constraints
   lidar_cone_detection:
@@ -37,7 +37,7 @@ perception:
     cone_max_height: 0.5
     cone_min_radius: 0.00
     cone_max_radius: 0.7
-    cone_min_points: 1
+    cone_min_points: 3
 
   # LiDAR position relative to vehicle base (meters, degrees)
   lidar_extrinsics:
@@ -67,7 +67,7 @@ perception:
     rotation_pitch: 0.0
     rotation_yaw: 0.0
 
-  # Camera 2 (Right) position relative to vehicle base (meters, degrees)
+  # Camera 2 (Rightt) position relative to vehicle base (meters, degrees)
   camera2_extrinsics:
     translation_x: -0.43
     translation_y: -0.15
@@ -76,10 +76,10 @@ perception:
     rotation_pitch: 0.0
     rotation_yaw: 0.0
 
- # Image preprocessing settings
+  # Image preprocessing settings
   camera_image_processing:
-    enable_preprocessing: true
-    gaussian_blur_sigma: 1.4
+    enable_preprocessing: false
+    gaussian_blur_sigma: 1.0
     bilateral_filter_diameter: 9
 
   camera_hsv_window_size:
@@ -89,22 +89,22 @@ perception:
   camera_hsv_yellow:
     hue_min: 18
     hue_max: 40
-    saturation_min: 35
-    value_min: 95
+    saturation_min: 36
+    value_min: 100
 
   # HSV thresholds for blue cone detection
   camera_hsv_blue:
     hue_min: 95
     hue_max: 110
-    saturation_min: 85
-    value_min: 95
+    saturation_min: 90
+    value_min: 100
 
   # HSV thresholds for orange cone detection
   camera_hsv_orange:
     hue_min: 10
-    hue_max: 17
-    saturation_min: 95
-    value_min: 95
+    hue_max: 15
+    saturation_min: 100
+    value_min: 100
 
 # ===========================================
 # Localization Parameters
@@ -143,31 +143,31 @@ planning:
   trajectory_generation:
     # Parameters used during the MAPPING lap
     mapping_mode:
-      lookahead_distance: 3.0
+      lookahead_distance: 2.0
       waypoint_spacing: 0.2
-      max_speed: 3.0
-      lane_offset: 2.0
+      max_speed: 6.0
+      lane_offset: 1.5
 
     # Parameters used during the RACING laps
     racing_mode:
-      lookahead_distance: 15.0
-      waypoint_spacing: 0.5
-      max_speed: 9.0
-      min_speed: 3.0
-      curvature_gain: 3.8
+      lookahead_distance: 8.0
+      waypoint_spacing: 0.25
+      max_speed: 12.5
+      min_speed: 7.0
+      curvature_gain: 6.0
 
-      # 👇 [교체] twistiness_logic 대신 complexity_logic 사용
       complexity_logic:
         enable: true
-        low_speed: 5.0          # 복잡 구간 최저 목표 속도
-
-        check_distance: 20.0         # 몇 미터 구간의 진동을 확인할 것인가 (단위: m)
-        vibration_max: 0.55           # 진동 지수가 이 값 이상이면 '복잡도 100%'로 간주
-        smoothing_window: 15         # 복잡도 점수를 부드럽게 만들기 위한 스무딩 창 크기
+        low_speed: 7.0
+        check_distance: 15.0
+        vibration_max: 0.55
+        smoothing_window: 20
+        score_decay_rate: 0.07
 
   behavioral_logic:
     # Lap Counting & Race Logic
-    total_laps: 10
+    total_laps: 2
+    finish_stop_distance: 1.0
 
 # ===========================================
 # Control Parameters
@@ -191,8 +191,9 @@ control:
       pid_kp: 0.3
       pid_ki: 0.0
       pid_kd: 0.01
-      max_throttle: 0.4
-      steering_based_speed_gain: 0.0
+      max_throttle: 1.0
+      max_brake: 1.0
+      steering_based_speed_gain: 5.0
 
   # Parameters used during the RACING laps
   racing_mode:
@@ -201,17 +202,18 @@ control:
       max_steer_angle: 1.0
 
     Stanley:
-      k_gain: 2.5
-      k_gain_curvature_boost: 1.6
+      k_gain: 2.7
+      k_gain_curvature_boost: 1.8
       alpha: 1.0
 
     SpeedControl:
-      pid_kp: 0.4
-      pid_ki: 0.0
-      pid_kd: 0.0
-      max_throttle: 0.4
-      # steering_sensitivity: 10.0
-      # speed_control_steering_lpf_alpha: 0.95
+      pid_kp: 0.5
+      pid_ki: 0.01
+      pid_kd: 0.05
+      max_throttle: 1.0
+      max_brake: 1.0
+      steering_based_speed_gain: 2.0
+      brake_activation_complexity_threshold: 0.5
 
   Vehicle:
     wheel_base: 1.55
