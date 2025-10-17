@@ -152,21 +152,21 @@ planning:
     racing_mode:
       lookahead_distance: 8.0
       waypoint_spacing: 0.25
-      max_speed: 12.5
-      min_speed: 7.0
+      max_speed: 11.0
+      min_speed: 5.0
       curvature_gain: 6.0
 
       complexity_logic:
         enable: true
-        low_speed: 7.0
+        low_speed: 5.0
         check_distance: 15.0
-        vibration_max: 0.55
+        vibration_max: 0.5
         smoothing_window: 20
         score_decay_rate: 0.07
 
   behavioral_logic:
     # Lap Counting & Race Logic
-    total_laps: 2
+    total_laps: 10
     finish_stop_distance: 1.0
 
 # ===========================================
@@ -207,7 +207,7 @@ control:
       alpha: 1.0
 
     SpeedControl:
-      pid_kp: 0.5
+      pid_kp: 0.6
       pid_ki: 0.01
       pid_kd: 0.05
       max_throttle: 1.0
