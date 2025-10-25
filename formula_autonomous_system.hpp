@@ -1475,7 +1475,11 @@ struct ControlParams {
         double max_throttle_;
         double max_brake_;
         double steering_based_speed_gain_;
-        double brake_activation_complexity_threshold_;
+
+        // Brake on Demand Logic Parameters (racing_mode only)
+        bool enable_brake_on_demand_;
+        double brake_trigger_curvature_;
+        double brake_application_gain_;
     };
 
     // ===================  Controller Selection ===================
@@ -1529,7 +1533,9 @@ struct ControlParams {
         if(!pnh.getParam("/control/racing_mode/SpeedControl/max_throttle", racing_mode.max_throttle_)){std::cerr<<"Param control/racing_mode/SpeedControl/max_throttle has error" << std::endl; return false;}
         if(!pnh.getParam("/control/racing_mode/SpeedControl/max_brake", racing_mode.max_brake_)){std::cerr<<"Param control/racing_mode/SpeedControl/max_brake has error" << std::endl; return false;}
         if(!pnh.getParam("/control/racing_mode/SpeedControl/steering_based_speed_gain", racing_mode.steering_based_speed_gain_)){std::cerr<<"Param control/racing_mode/SpeedControl/steering_based_speed_gain has error" << std::endl; return false;}
-        if(!pnh.getParam("/control/racing_mode/SpeedControl/brake_activation_complexity_threshold", racing_mode.brake_activation_complexity_threshold_)){std::cerr<<"Param control/racing_mode/SpeedControl/brake_activation_complexity_threshold has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/SpeedControl/enable_brake_on_demand", racing_mode.enable_brake_on_demand_)){std::cerr<<"Param /control/racing_mode/SpeedControl/enable_brake_on_demand has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/SpeedControl/brake_trigger_curvature", racing_mode.brake_trigger_curvature_)){std::cerr<<"Param control/racing_mode/SpeedControl/brake_trigger_curvature has error" << std::endl; return false;}
+        if(!pnh.getParam("/control/racing_mode/SpeedControl/brake_application_gain", racing_mode.brake_application_gain_)){std::cerr<<"Param control/racing_mode/SpeedControl/brake_application_gain has error" << std::endl; return false;}
       
         // =================== Vehicle Specification ===================
         if(!pnh.getParam("/control/Vehicle/wheel_base", vehicle_length_)){std::cerr<<"Param control/Vehicle/wheel_base has error" << std::endl; return false;}

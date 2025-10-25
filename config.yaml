@@ -151,13 +151,13 @@ planning:
     # Parameters used during the RACING laps
     racing_mode:
       lookahead_distance: 8.0
-      waypoint_spacing: 0.25
+      waypoint_spacing: 0.5
       max_speed: 11.0
       min_speed: 5.0
       curvature_gain: 6.0
 
       complexity_logic:
-        enable: true
+        enable: false
         low_speed: 5.0
         check_distance: 15.0
         vibration_max: 0.5
@@ -166,7 +166,7 @@ planning:
 
   behavioral_logic:
     # Lap Counting & Race Logic
-    total_laps: 10
+    total_laps: 2
     finish_stop_distance: 1.0
 
 # ===========================================
@@ -213,7 +213,9 @@ control:
       max_throttle: 1.0
       max_brake: 1.0
       steering_based_speed_gain: 2.0
-      brake_activation_complexity_threshold: 0.5
+      enable_brake_on_demand: true
+      brake_trigger_curvature: 0.125
+      brake_application_gain: 1.0
 
   Vehicle:
     wheel_base: 1.55

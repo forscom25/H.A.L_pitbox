@@ -1780,7 +1780,7 @@ void FormulaAutonomousSystem::generateGlobalPath() {
     const auto& params = planning_params_->trajectory_generation.racing_mode; // Use RACING parameters
     std::vector<TrajectoryPoint> temp_path;
 
-    for (double s = 0; s < total_length; s += 0.5) { // Sample every 0.5m
+    for (double s = 0; s < total_length; s += params.waypoint_spacing_) { // Sample every 0.5m
         double x = spline_x(s);
         double y = spline_y(s);
         double dx = spline_x.deriv(1, s);
@@ -1799,64 +1799,76 @@ void FormulaAutonomousSystem::generateGlobalPath() {
         return;
     }
 
-    // Speed profiling based on complexity
-    // 1. Calculate 'Complexity Score'
-    std::vector<double> raw_complexity_scores(temp_path.size(), 0.0);
-    if (params.complexity_enable_) {
-        for (size_t i = 0; i < temp_path.size(); ++i) {
-            size_t target_idx = i;
-            double target_s = temp_path[i].s + params.complexity_check_distance_;
-            for (size_t j = i; j < temp_path.size(); ++j) {
-                if (temp_path[j].s >= target_s) { target_idx = j; break; }
-                if (j == temp_path.size() - 1) target_idx = j;
-            }
-            if (target_idx <= i) continue;
+    if (params.complexity_enable_) {// Speed profiling based on complexity
+        ROS_INFO_ONCE("Generating Global Path using COMPLEXITY logic.");
 
-            double total_curvature_change = 0.0;
-            for (size_t j = i + 1; j <= target_idx; ++j) {
-                total_curvature_change += std::abs(temp_path[j].curvature - temp_path[j-1].curvature);
-            }
-            double score = total_curvature_change / params.complexity_vibration_max_;
-            raw_complexity_scores[i] = std::max(0.0, std::min(1.0, score));
-        }
-    }
-
-    // 2. Smoothing score(Moving Average)
-    std::vector<double> smoothed_complexity_scores = raw_complexity_scores;
-    if (params.complexity_enable_ && params.complexity_smoothing_window_ > 1) {
-        int half_window = params.complexity_smoothing_window_ / 2;
-        if (temp_path.size() > params.complexity_smoothing_window_) {
-            for (size_t i = half_window; i < temp_path.size() - half_window; ++i) {
-                double sum = 0;
-                for (int j = -half_window; j <= half_window; ++j) {
-                    sum += raw_complexity_scores[i + j];
+        // 1. Calculate 'Complexity Score'
+        std::vector<double> raw_complexity_scores(temp_path.size(), 0.0);
+        if (params.complexity_enable_) {
+            for (size_t i = 0; i < temp_path.size(); ++i) {
+                size_t target_idx = i;
+                double target_s = temp_path[i].s + params.complexity_check_distance_;
+                for (size_t j = i; j < temp_path.size(); ++j) {
+                    if (temp_path[j].s >= target_s) { target_idx = j; break; }
+                    if (j == temp_path.size() - 1) target_idx = j;
                 }
-                smoothed_complexity_scores[i] = sum / params.complexity_smoothing_window_;
+                if (target_idx <= i) continue;
+
+                double total_curvature_change = 0.0;
+                for (size_t j = i + 1; j <= target_idx; ++j) {
+                    total_curvature_change += std::abs(temp_path[j].curvature - temp_path[j-1].curvature);
+                }
+                double score = total_curvature_change / params.complexity_vibration_max_;
+                raw_complexity_scores[i] = std::max(0.0, std::min(1.0, score));
             }
         }
-    }
 
-    // 3. Apply Relaxation Filter
-    std::vector<double> final_scores = smoothed_complexity_scores;
-    if (params.complexity_enable_) {
-        for (size_t i = 1; i < final_scores.size(); ++i) {
-            double max_decrease = params.complexity_score_decay_rate_;
-            final_scores[i] = std::max(final_scores[i], final_scores[i-1] - max_decrease);
+        // 2. Smoothing score(Moving Average)
+        std::vector<double> smoothed_complexity_scores = raw_complexity_scores;
+        if (params.complexity_enable_ && params.complexity_smoothing_window_ > 1) {
+            int half_window = params.complexity_smoothing_window_ / 2;
+            if (temp_path.size() > params.complexity_smoothing_window_) {
+                for (size_t i = half_window; i < temp_path.size() - half_window; ++i) {
+                    double sum = 0;
+                    for (int j = -half_window; j <= half_window; ++j) {
+                        sum += raw_complexity_scores[i + j];
+                    }
+                    smoothed_complexity_scores[i] = sum / params.complexity_smoothing_window_;
+                }
+            }
         }
-    }
 
-    // 4. Speed Blending
-    for (size_t i = 0; i < temp_path.size(); ++i) {
-        double high_speed = params.max_speed_ / (1.0 + params.curvature_gain_ * std::abs(temp_path[i].curvature));
-        double low_speed = params.complexity_low_speed_;
-        
-        double complexity_score = final_scores[i];
+        // 3. Apply Relaxation Filter
+        std::vector<double> final_scores = smoothed_complexity_scores;
+        if (params.complexity_enable_) {
+            for (size_t i = 1; i < final_scores.size(); ++i) {
+                double max_decrease = params.complexity_score_decay_rate_;
+                final_scores[i] = std::max(final_scores[i], final_scores[i-1] - max_decrease);
+            }
+        }
 
-        temp_path[i].complexity_score = complexity_score;
-        
-        temp_path[i].speed = high_speed * (1.0 - complexity_score) + low_speed * complexity_score;
-        
-        temp_path[i].speed = std::max(params.min_speed_, std::min(temp_path[i].speed, params.max_speed_));
+        // 4. Speed Blending
+        for (size_t i = 0; i < temp_path.size(); ++i) {
+            double high_speed = params.max_speed_ / (1.0 + params.curvature_gain_ * std::abs(temp_path[i].curvature));
+            double low_speed = params.complexity_low_speed_;
+            
+            double complexity_score = final_scores[i];
+
+            temp_path[i].complexity_score = complexity_score;
+            
+            temp_path[i].speed = high_speed * (1.0 - complexity_score) + low_speed * complexity_score;
+            
+            temp_path[i].speed = std::max(params.min_speed_, std::min(temp_path[i].speed, params.max_speed_));
+        }
+    } else {// Speed profiling based on simple curvature
+        ROS_INFO_ONCE("Generating Global Path using SIMPLE CURVATURE logic.");
+
+        for (size_t i = 0; i < temp_path.size(); ++i) {
+            // final speed = max / (1+ gain * |curvature|)
+            double target_speed = params.max_speed_ / (1.0 + params.curvature_gain_ * std::abs(temp_path[i].curvature));
+            // clamp to min and max speed
+            temp_path[i].speed = std::max(params.min_speed_, std::min(target_speed, params.max_speed_));
+        }
     }
 
     // 5. Final Moving Average Filter
@@ -1874,7 +1886,9 @@ void FormulaAutonomousSystem::generateGlobalPath() {
 
     // 6. Update global_path
     global_path_ = smoothed_path;
-    ROS_INFO("Complexity-based Global Path generated with %zu points.", global_path_.size());
+    is_global_path_generated_ = true; // flag update
+    ROS_INFO("Global Path generated with %zu points. Complexity logic: %s",
+             global_path_.size(), params.complexity_enable_ ? "ENABLED" : "DISABLED");
 }
 
 // ================================================================================================
@@ -2326,6 +2340,7 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
         }
 
     } else if (planning_state_ == ASState::AS_DRIVING) {
+        // Determine which set of parameters to use based on the current driving mode
         const auto& planning_params = (current_mode_ == DrivingMode::RACING)
                                         ? planning_params_->trajectory_generation.racing_mode
                                         : planning_params_->trajectory_generation.mapping_mode;
@@ -2334,44 +2349,66 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
                                          ? control_params_->racing_mode
                                          : control_params_->mapping_mode;
 
+        // Calculate steering angle using the selected lateral controller
         final_steering = lateral_controller_->calculateSteeringAngle(vehicle_state, trajectory_points_, control_params, control_params_->vehicle_length_);
         
-        double base_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].speed;        
+        // Calculate target speed, considering steering angle dampening
+        double base_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].speed; // Use speed from the first point in the local path       
         double steering_dampening = std::abs(final_steering) * control_params.steering_based_speed_gain_;
         double final_target_speed = base_target_speed - steering_dampening;
-        final_target_speed = std::max(planning_params.min_speed_, final_target_speed);
+        final_target_speed = std::max(planning_params.min_speed_, final_target_speed); // Ensure speed is within min/max limits
         
-        double control_effort = longitudinal_controller_->calculate(
+        double throttle_effort = 0.0;
+        throttle_effort = longitudinal_controller_->calculate(
             final_target_speed, 
             vehicle_state.speed, 
             control_params.pid_kp_, 
             control_params.pid_ki_, 
             control_params.pid_kd_, 
-            -control_params.max_brake_,    // min_output for PID
-            control_params.max_throttle_   // max_output for PID
+            0.0,
+            control_params.max_throttle_
+            // PID lower bound is 0, only calculates positive (throttle) effort
         );
 
-        double current_complexity = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].complexity_score;
+        final_throttle = throttle_effort; // Apply calculated throttle
+        final_brake = 0.0; // Default brake is 0
 
-        if (control_effort > 0.0) {
-            final_throttle = control_effort;
-            final_brake = 0.0;
-            
-        } else {
-            // check complexity score to decide braking strategy
-            if (current_complexity > control_params.brake_activation_complexity_threshold_) { // brake required
-                final_throttle = 0.0;
-                final_brake = -control_effort; // control_effort is negative, so - makes it positive
-            } else { // break not required
-                final_throttle = 0.0;
-                final_brake = 0.0;
+        // 2. Braking (Brake) Control: 'Brake on Demand' logic for RACING mode
+        if (current_mode_ == DrivingMode::RACING && control_params.enable_brake_on_demand_ && !trajectory_points_.empty()) {
+            double max_curvature_in_path = 0.0;
+            double target_speed_at_curve = final_target_speed; // Initialize with current target speed
+
+            // Find the point with the highest curvature in the upcoming local path
+            for (const auto& point : trajectory_points_) {
+                if (std::abs(point.curvature) > max_curvature_in_path) {
+                    max_curvature_in_path = std::abs(point.curvature);
+                    target_speed_at_curve = point.speed*0.8; // Get the pre-calculated target speed for that high-curvature point
+                }
+            }
+
+            // Check if braking conditions are met:
+            // Condition 1: Upcoming path curvature exceeds the trigger threshold
+            // Condition 2: Current vehicle speed is higher than the target speed for that curve
+            if (max_curvature_in_path > control_params.brake_trigger_curvature_ && vehicle_state.speed > target_speed_at_curve) {
+                // Calculate how much speed needs to be reduced
+                double speed_error = vehicle_state.speed - target_speed_at_curve;
+                // Apply brake proportionally to the speed error, limited by max_brake
+                final_brake = std::min(control_params.max_brake_, speed_error * control_params.brake_application_gain_);
+                final_throttle = 0.0; // Ensure no throttle is applied when braking
+                ROS_INFO_THROTTLE(0.5, "[BRAKE] Curv: %.3f > %.3f, Speed: %.2f > %.2f -> Brake: %.2f",
+                          max_curvature_in_path, control_params.brake_trigger_curvature_,
+                          vehicle_state.speed, target_speed_at_curve, final_brake);
             }
         }
 
-        ROS_INFO_THROTTLE(1.0, "[DEBUG] Complexity: %.2f | Brake Threshold: %.2f | Final Brake: %.2f",
-                          current_complexity,
-                          control_params.brake_activation_complexity_threshold_,
-                          final_brake);
+        static int count = 0; // count 변수는 static으로 선언하여 함수 호출 간 상태 유지
+        if (++count % 100 == 0) { // Print every 100 loops (adjust frequency as needed)
+            ROS_INFO("[Control] Mode:%s | Steer:%.2f | Thr:%.2f | Brk:%.2f | TargetSpd:%.2f | CurrSpd:%.2f",
+                     (current_mode_ == DrivingMode::RACING ? "RACING" : "MAPPING"),
+                     final_steering, final_throttle, final_brake,
+                     final_target_speed, vehicle_state.speed); // final_target_speed 사용 가능
+             if (count >= 10000) count = 0; // count 값 초기화 (선택 사항)
+        } 
     }
 
     // 계산된 값을 최종적으로 제어 명령에 '할당' (한 곳에서만 처리)
@@ -2382,7 +2419,7 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
     // Debug
     static int count = 0;
     count++;
-    if(count % 10 == 0){
+    if(count % 10 == 0){               
         static std::chrono::steady_clock::time_point last_time = std::chrono::steady_clock::now();
         std::chrono::steady_clock::time_point current_time = std::chrono::steady_clock::now();
         std::chrono::duration<double> duration = current_time - last_time;
