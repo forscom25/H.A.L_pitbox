@@ -1,29 +1,31 @@
-feat(planning, control): 전역 경로 생성 및 제동 로직 개선
+feat(control): 조향 lock 해결을 위한 하이브리드 제동 로직 도입
 
-주요 변경 사항:
+기존의 'Brake on Demand' 로직은 PID 속도 제어와 분리되어 있어,
+제동이 활성화될 때 스로틀이 강제로 0이 되었습니다.
+이로 인해 조향 중 속도 제어가 불가능해지는 '조향 lock' 현상이 발생했습니다.
 
-전역 경로 생성 간격 파라미터화:
+이 커밋은 문제를 해결하기 위해 두 가지 주요 사항을 수정합니다.
 
-기존에 사용되지 않던 racing_mode.waypoint_spacing 파라미터를 전역 경로(Global Path)의 샘플링 간격으로 재활용합니다. (generateGlobalPath 함수)
+PID 제어 통합 (조향 Lock 해결)
 
-이를 통해 웨이포인트 밀도를 조절하여 목표 속도의 잦은 변경 문제를 완화하고, 주행 안정성을 향상시킵니다.
+longitudinal_controller_ (PID)가 0.0 ~ max_throttle 범위 대신, -max_brake ~ max_throttle의 연속적인 값을 출력하도록 변경했습니다.
 
-config.yaml의 해당 파라미터 주석을 수정하여 용도를 명확히 했습니다.
+PID 출력이 양수(+)이면 '스로틀'로, 음수(-)이면 '브레이크'로 매핑됩니다.
 
-'요청 시 제동(Brake on Demand)' 로직 도입:
+이를 통해 제동 중에도 PID가 목표 속도에 따라 미세하게 속도를 조절할 수 있게 되어, 조향 안정성을 확보합니다.
 
-가속(PID)과 제동(조건부 로직) 제어를 분리하여, 불필요한 감속을 줄이고 에너지 효율성을 높입니다.
+선제적 목표 속도 설정 (공격적 제동)
 
-PID 제어기는 이제 가속(Throttle > 0)만 담당하며, 목표 속도 초과 시 Coasting(관성 주행)을 유도합니다.
+final_target_speed가 단순히 현재 지점의 속도만 따르지 않도록 수정했습니다.
 
-브레이크는 racing_mode에서만 작동하며, 전방 경로의 곡률이 brake_trigger_curvature 임계값을 넘고 현재 속도가 해당 커브 목표 속도보다 빠를 때만 brake_application_gain에 따라 개입합니다.
+다가오는 로컬 경로(trajectory_points_) 전체를 스캔하여, 경로 상의 가장 낮은 목표 속도 (가장 급한 커브)를 찾습니다.
 
-관련 파라미터 (enable_brake_on_demand, trigger_curvature, application_gain)를 config.yaml의 control.racing_mode.BrakeLogic 섹션에 추가하고 C++ 구조체(ControlParams) 및 로직(run 함수)을 업데이트했습니다.
+이 '선제적(Proactive) 속도'와 '현재 조향각 기반 반응형(Reactive) 속도' 중 더 낮은(보수적인) 값을 최종 PID 목표 속도로 설정합니다.
 
-조건부 복잡도 로직 실행:
+이를 통해 급격한 커브 진입 전에 PID가 자연스럽게 강력한 제동(- 값)을 출력하여 선제적으로 감속합니다.
 
-generateGlobalPath 함수를 수정하여 planning.trajectory_generation.racing_mode.complexity_logic.enable 파라미터 값에 따라 속도 프로파일링 방식을 선택할 수 있도록 변경했습니다.
+기타 수정:
 
-enable: true (기본값): 기존의 복잡도 점수 기반 속도 계산 수행
+formula_autonomous_system.cpp: 더 이상 사용되지 않는 enable_brake_on_demand 관련 로직을 제거했습니다.
 
-enable: false: 단순 곡률 기반 속도 계산 수행 (브레이크 기능 강화에 따른 옵션)
+config.yaml: enable_brake_on_demand, brake_trigger_curvature 등 불필요해진 파라미터의 정리가 필요합니다.
