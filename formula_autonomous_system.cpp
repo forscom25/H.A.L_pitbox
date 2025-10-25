@@ -2355,50 +2355,49 @@ bool FormulaAutonomousSystem::run(sensor_msgs::PointCloud2& lidar_msg,
         // Calculate target speed, considering steering angle dampening
         double base_target_speed = trajectory_points_.empty() ? 0.0 : trajectory_points_[0].speed; // Use speed from the first point in the local path       
         double steering_dampening = std::abs(final_steering) * control_params.steering_based_speed_gain_;
-        double final_target_speed = base_target_speed - steering_dampening;
+        
+        // [수정] 다가오는 로컬 경로에서 가장 낮은 속도(가장 위험한 커브)를 찾습니다.
+        double min_speed_in_path = planning_params.max_speed_; // 최대 속도로 초기화
+        if (!trajectory_points_.empty()) {
+            // 1. (Proactive) 로컬 경로 상의 최소 목표 속도 (커브 대비)
+            double current_min_speed = trajectory_points_[0].speed;
+            for (const auto& point : trajectory_points_) {
+                if (point.speed < current_min_speed) {
+                    current_min_speed = point.speed;
+                }
+            }
+            min_speed_in_path = current_min_speed;
+        
+        } else {
+            min_speed_in_path = 0.0; // 경로가 없으면 정지
+        }
+        
+        // 2. (Reactive) 현재 조향각에 기반한 속도 감속
+        double reactive_speed = base_target_speed - steering_dampening;
+
+        // 3. (Final) Proactive 속도와 Reactive 속도 중 더 '보수적인' (느린) 속도를 최종 목표로 설정
+        double final_target_speed = std::min(min_speed_in_path, reactive_speed);
+
         final_target_speed = std::max(planning_params.min_speed_, final_target_speed); // Ensure speed is within min/max limits
         
-        double throttle_effort = 0.0;
-        throttle_effort = longitudinal_controller_->calculate(
+        double control_effort = longitudinal_controller_->calculate(
             final_target_speed, 
             vehicle_state.speed, 
             control_params.pid_kp_, 
             control_params.pid_ki_, 
             control_params.pid_kd_, 
-            0.0,
+            -control_params.max_brake_,
             control_params.max_throttle_
-            // PID lower bound is 0, only calculates positive (throttle) effort
         );
 
-        final_throttle = throttle_effort; // Apply calculated throttle
-        final_brake = 0.0; // Default brake is 0
-
-        // 2. Braking (Brake) Control: 'Brake on Demand' logic for RACING mode
-        if (current_mode_ == DrivingMode::RACING && control_params.enable_brake_on_demand_ && !trajectory_points_.empty()) {
-            double max_curvature_in_path = 0.0;
-            double target_speed_at_curve = final_target_speed; // Initialize with current target speed
-
-            // Find the point with the highest curvature in the upcoming local path
-            for (const auto& point : trajectory_points_) {
-                if (std::abs(point.curvature) > max_curvature_in_path) {
-                    max_curvature_in_path = std::abs(point.curvature);
-                    target_speed_at_curve = point.speed*0.8; // Get the pre-calculated target speed for that high-curvature point
-                }
-            }
-
-            // Check if braking conditions are met:
-            // Condition 1: Upcoming path curvature exceeds the trigger threshold
-            // Condition 2: Current vehicle speed is higher than the target speed for that curve
-            if (max_curvature_in_path > control_params.brake_trigger_curvature_ && vehicle_state.speed > target_speed_at_curve) {
-                // Calculate how much speed needs to be reduced
-                double speed_error = vehicle_state.speed - target_speed_at_curve;
-                // Apply brake proportionally to the speed error, limited by max_brake
-                final_brake = std::min(control_params.max_brake_, speed_error * control_params.brake_application_gain_);
-                final_throttle = 0.0; // Ensure no throttle is applied when braking
-                ROS_INFO_THROTTLE(0.5, "[BRAKE] Curv: %.3f > %.3f, Speed: %.2f > %.2f -> Brake: %.2f",
-                          max_curvature_in_path, control_params.brake_trigger_curvature_,
-                          vehicle_state.speed, target_speed_at_curve, final_brake);
-            }
+        if (control_effort > 0.0) {
+            // 출력이 양수이면 스로틀
+            final_throttle = control_effort;
+            final_brake = 0.0;
+        } else {
+            // 출력이 음수이면 브레이크 (값을 양수로 변환)
+            final_throttle = 0.0;
+            final_brake = -control_effort; 
         }
 
         static int count = 0; // count 변수는 static으로 선언하여 함수 호출 간 상태 유지

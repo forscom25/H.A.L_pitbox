@@ -29,14 +29,14 @@ perception:
   # DBSCAN clustering parameters
   lidar_clustering:
     dbscan_eps: 0.5
-    dbscan_min_points: 5
+    dbscan_min_points: 2
 
   # Cone geometric constraints
   lidar_cone_detection:
-    cone_min_height: 0.1
+    cone_min_height: 0.2
     cone_max_height: 0.5
-    cone_min_radius: 0.00
-    cone_max_radius: 0.7
+    cone_min_radius: 0.01
+    cone_max_radius: 0.5
     cone_min_points: 3
 
   # LiDAR position relative to vehicle base (meters, degrees)
@@ -150,7 +150,7 @@ planning:
 
     # Parameters used during the RACING laps
     racing_mode:
-      lookahead_distance: 8.0
+      lookahead_distance: 12.0
       waypoint_spacing: 0.5
       max_speed: 11.0
       min_speed: 5.0
@@ -213,9 +213,10 @@ control:
       max_throttle: 1.0
       max_brake: 1.0
       steering_based_speed_gain: 2.0
+      # Brake on Demand Logic Parameters(off temporary)
       enable_brake_on_demand: true
       brake_trigger_curvature: 0.125
-      brake_application_gain: 1.0
+      brake_application_gain: 0.8
 
   Vehicle:
     wheel_base: 1.55
